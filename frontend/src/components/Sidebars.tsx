@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent, ReactNode } from "react";
 import type { ChatSource, HttpApi, RelatedItem, SearchHit } from "../lib/api.ts";
 import { searchNotes } from "../lib/text.ts";
 import type { LinkIndex, OutlineItem } from "../lib/text.ts";
-import type { LocalNote } from "../lib/types.ts";
+import type { Folder, LocalNote } from "../lib/types.ts";
 import type { LeftTab, RightTab } from "../lib/ui.ts";
 
 const icon = (n: LocalNote) => (n.source === "pdf" ? "📕" : "📄");
@@ -21,8 +22,18 @@ interface LeftProps {
   online: boolean;
   onOpenKey: (key: string) => void;
   onOpenId: (id: number) => void;
-  onNew: () => void;
-  onUpload: () => void;
+  /** folderId: undefined = hỏi người dùng (nút chung), null = ngoài cùng, số = vào thư mục đó. */
+  onNew: (folderId?: number | null) => void;
+  onUpload: (folderId?: number | null) => void;
+  folders: Folder[];
+  collapsed: number[];
+  onToggleFolder: (id: number) => void;
+  onMove: (key: string, folderId: number | null) => void;
+  onDropFiles: (files: FileList, folderId: number | null) => void;
+  /** Trả về thông báo lỗi (để hiện ngay ô nhập) hoặc null nếu thành công. */
+  onCreateFolder: (name: string) => Promise<string | null>;
+  onRenameFolder: (id: number, name: string) => Promise<string | null>;
+  onDeleteFolder: (folder: Folder, count: number) => void;
 }
 
 export function LeftSidebar(p: LeftProps) {
@@ -51,18 +62,126 @@ export function LeftSidebar(p: LeftProps) {
   );
 }
 
+const NOTE_MIME = "application/x-pkm-note";
+type DropTarget = number | "root" | null;
+
+function hasDragType(e: DragEvent, t: string): boolean {
+  return Array.from(e.dataTransfer.types).includes(t);
+}
+
+/** Ô nhập tên thư mục (tạo mới hoặc đổi tên): Enter lưu, Esc hủy, bấm ra ngoài cũng lưu. */
+function FolderNameInput({ initial, onSubmit, onCancel }: {
+  initial: string; onSubmit: (name: string) => Promise<string | null>; onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const [error, setError] = useState<string | null>(null);
+  const busy = useRef(false);
+  const closed = useRef(false); // đã hủy bằng Esc: bỏ qua sự kiện blur khi ô nhập biến mất
+  const cancel = () => {
+    closed.current = true;
+    onCancel();
+  };
+  const submit = async () => {
+    if (busy.current || closed.current) return;
+    const name = value.trim();
+    if (!name || name === initial) return cancel();
+    busy.current = true;
+    const err = await onSubmit(name);
+    busy.current = false;
+    if (err) setError(err);
+  };
+  return (
+    <div className="folder-input">
+      <input autoFocus value={value} placeholder="Tên thư mục" maxLength={100}
+             onChange={(e) => { setValue(e.target.value); setError(null); }}
+             onFocus={(e) => e.target.select()}
+             onKeyDown={(e) => {
+               if (e.key === "Enter") { e.preventDefault(); void submit(); }
+               else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+             }}
+             onBlur={() => { if (!error) void submit(); }} />
+      {error && <div className="form-error small">{error}</div>}
+    </div>
+  );
+}
+
 function FilesPanel(p: LeftProps) {
   const [sort, setSort] = useState<"recent" | "name">("recent");
+  const [editing, setEditing] = useState<null | "new" | number>(null); // "new" = đang tạo thư mục; số = đang đổi tên
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [over, setOver] = useState<DropTarget>(null);
+
   const list = useMemo(() => {
     let l = p.tagFilter ? p.notes.filter((n) => p.noteTags.get(n.key)?.includes(p.tagFilter as string)) : p.notes;
     if (sort === "name") l = [...l].sort((a, b) => a.title.localeCompare(b.title, "vi"));
     return l;
   }, [p.notes, p.tagFilter, p.noteTags, sort]);
+
+  const folderIds = useMemo(() => new Set(p.folders.map((f) => f.id)), [p.folders]);
+  const byFolder = useMemo(() => {
+    const m = new Map<number | null, LocalNote[]>();
+    for (const n of list) {
+      const f = n.folder_id !== null && folderIds.has(n.folder_id) ? n.folder_id : null;
+      const arr = m.get(f) ?? [];
+      arr.push(n);
+      m.set(f, arr);
+    }
+    return m;
+  }, [list, folderIds]);
+  const totals = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const n of p.notes) if (n.folder_id !== null) m.set(n.folder_id, (m.get(n.folder_id) ?? 0) + 1);
+    return m;
+  }, [p.notes]);
+  const draggedFolder = dragKey ? p.notes.find((n) => n.key === dragKey)?.folder_id ?? null : null;
+
+  // ---------------------------------------------------------------- kéo thả (ghi chú trong app, hoặc file từ máy)
+  const dropProps = (target: number | "root") => ({
+    onDragOver: (e: DragEvent) => {
+      if (!hasDragType(e, NOTE_MIME) && !hasDragType(e, "Files")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = hasDragType(e, "Files") ? "copy" : "move";
+      if (over !== target) setOver(target);
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null) && over === target) setOver(null);
+    },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setOver(null);
+      setDragKey(null);
+      const folderId = target === "root" ? null : target;
+      if (e.dataTransfer.files.length) return p.onDropFiles(e.dataTransfer.files, folderId);
+      const key = e.dataTransfer.getData(NOTE_MIME);
+      if (key) p.onMove(key, folderId);
+    },
+  });
+
+  const noteRow = (n: LocalNote, nested: boolean): ReactNode => (
+    <li key={n.key}>
+      <button className={"file-item" + (n.key === p.activeKey ? " active" : "") + (nested ? " nested" : "") + (n.key === dragKey ? " dragging" : "")}
+              draggable onClick={() => p.onOpenKey(n.key)} title={n.title}
+              onDragStart={(e) => { e.dataTransfer.setData(NOTE_MIME, n.key); e.dataTransfer.effectAllowed = "move"; setDragKey(n.key); }}
+              onDragEnd={() => { setDragKey(null); setOver(null); }}>
+        <span className="file-icon">{icon(n)}</span>
+        <span className="file-title">{n.title || "Chưa đặt tên"}</span>
+        {n.has_conflict && <span title="Có xung đột">⚠</span>}
+        {(n.dirty || n.id === null) && <span className="dot" title="Chưa đồng bộ" />}
+      </button>
+    </li>
+  );
+
+  const filtering = !!p.tagFilter;
+  const rootNotes = byFolder.get(null) ?? [];
+
   return (
-    <div className="panel">
+    <div className="panel" {...dropProps("root")}>
       <div className="panel-actions">
-        <button onClick={p.onNew} title="Ghi chú mới">✚ Mới</button>
-        <button onClick={p.onUpload} title="Tải lên .md / .pdf">⬆ Tải lên</button>
+        <button onClick={() => p.onNew()} title="Ghi chú mới">✚ Mới</button>
+        <button onClick={() => setEditing("new")} title="Tạo thư mục mới">📁 Thư mục</button>
+        <button onClick={() => p.onUpload()} title="Tải lên .md / .pdf">⬆ Tải lên</button>
         <button onClick={() => setSort(sort === "recent" ? "name" : "recent")} title="Đổi cách sắp xếp">
           {sort === "recent" ? "⏱ Mới nhất" : "A–Z"}
         </button>
@@ -72,18 +191,54 @@ function FilesPanel(p: LeftProps) {
           <span className="chip">#{p.tagFilter} <button aria-label="Bỏ lọc" onClick={() => p.setTagFilter(null)}>×</button></span>
         </div>
       )}
-      {list.length === 0 && <div className="muted pad">{p.notes.length === 0 ? "Chưa có ghi chú. Bấm “✚ Mới” hoặc tải lên file." : "Không có ghi chú phù hợp."}</div>}
+      {editing === "new" && (
+        <FolderNameInput initial="" onCancel={() => setEditing(null)}
+                         onSubmit={async (name) => { const err = await p.onCreateFolder(name); if (!err) setEditing(null); return err; }} />
+      )}
+      {list.length === 0 && p.folders.length === 0 && (
+        <div className="muted pad">{p.notes.length === 0 ? "Chưa có ghi chú. Bấm “✚ Mới” hoặc tải lên file." : "Không có ghi chú phù hợp."}</div>
+      )}
+
       <ul className="file-list">
-        {list.map((n) => (
-          <li key={n.key}>
-            <button className={"file-item" + (n.key === p.activeKey ? " active" : "")} onClick={() => p.onOpenKey(n.key)} title={n.title}>
-              <span className="file-icon">{icon(n)}</span>
-              <span className="file-title">{n.title || "Chưa đặt tên"}</span>
-              {n.has_conflict && <span title="Có xung đột">⚠</span>}
-              {(n.dirty || n.id === null) && <span className="dot" title="Chưa đồng bộ" />}
-            </button>
-          </li>
-        ))}
+        {p.folders.map((f) => {
+          const items = byFolder.get(f.id) ?? [];
+          if (filtering && items.length === 0) return null;
+          const open = filtering || !p.collapsed.includes(f.id);
+          return (
+            <li key={`f${f.id}`} className={"folder" + (over === f.id ? " drop-over" : "")} {...dropProps(f.id)}>
+              {editing === f.id ? (
+                <FolderNameInput initial={f.name} onCancel={() => setEditing(null)}
+                                 onSubmit={async (name) => { const err = await p.onRenameFolder(f.id, name); if (!err) setEditing(null); return err; }} />
+              ) : (
+                <div className="folder-row">
+                  <button className="folder-head" onClick={() => p.onToggleFolder(f.id)} aria-expanded={open} title={f.name}>
+                    <span className="caret">{open ? "▾" : "▸"}</span>
+                    <span className="file-icon">{open ? "📂" : "📁"}</span>
+                    <span className="file-title">{f.name}</span>
+                    <span className="badge">{totals.get(f.id) ?? 0}</span>
+                  </button>
+                  <span className="folder-actions">
+                    <button title="Ghi chú mới trong thư mục này" aria-label="Ghi chú mới trong thư mục" onClick={() => p.onNew(f.id)}>✚</button>
+                    <button title="Tải file lên thư mục này" aria-label="Tải lên thư mục" onClick={() => p.onUpload(f.id)}>⬆</button>
+                    <button title="Đổi tên thư mục" aria-label="Đổi tên thư mục" onClick={() => setEditing(f.id)}>✎</button>
+                    <button title="Xóa thư mục (ghi chú bên trong được giữ lại)" aria-label="Xóa thư mục" className="danger"
+                            onClick={() => p.onDeleteFolder(f, totals.get(f.id) ?? 0)}>🗑</button>
+                  </span>
+                </div>
+              )}
+              {open && (
+                <ul className="file-list">
+                  {items.map((n) => noteRow(n, true))}
+                  {items.length === 0 && <li className="muted small folder-empty">Trống. Kéo ghi chú vào đây.</li>}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+        {dragKey && draggedFolder !== null && (
+          <li className={"drop-root" + (over === "root" ? " drop-over" : "")}>⤓ Thả vào đây để đưa ra ngoài thư mục</li>
+        )}
+        {rootNotes.map((n) => noteRow(n, false))}
       </ul>
     </div>
   );

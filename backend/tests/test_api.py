@@ -237,6 +237,7 @@ def test_list_full_and_pdf_original_is_stored_and_owner_only(client):
     assert client.get(f"/api/notes/{n['id']}/file", headers=ha).status_code == 404
 
 
+
 def test_hcaptcha_required_for_login_and_register(tmp_path, monkeypatch):
     from app.core import captcha
     seen = []
@@ -258,3 +259,38 @@ def test_hcaptcha_required_for_login_and_register(tmp_path, monkeypatch):
         assert c.post("/api/auth/login", data={**form, "captcha_token": "sai"}).status_code == 400
         assert c.post("/api/auth/login", data={**form, "captcha_token": "ok-token"}).status_code == 200
     assert ("sec", "ok-token", "site") in seen
+
+# ---------------------------------------------------------------- thu muc
+def test_folders_over_http(client):
+    h, hb = login(client), login(client, "bob")
+    r = client.post("/api/folders", json={"name": "Đồ án"}, headers=h)
+    assert r.status_code == 201
+    fid = r.json()["id"]
+    assert client.post("/api/folders", json={"name": "đồ án"}, headers=h).status_code == 409
+    assert client.post("/api/folders", json={"name": ""}, headers=h).status_code == 422
+    assert [f["name"] for f in client.get("/api/folders", headers=h).json()] == ["Đồ án"]
+    assert client.get("/api/folders", headers=hb).json() == []
+    assert client.patch(f"/api/folders/{fid}", json={"name": "x"}, headers=hb).status_code == 404
+
+    n = make_note(client, h, "Trong", A, folder_id=fid)
+    assert n["folder_id"] == fid
+    up = client.post("/api/notes/upload", headers=h, data={"folder_id": str(fid)},
+                     files={"file": ("Tep.md", b"# T\nnoi dung", "text/markdown")})
+    assert up.status_code == 201 and up.json()["folder_id"] == fid
+
+    # chuyen ra ngoai (folder_id null) va vao lai; khong gui folder_id thi giu nguyen
+    r = client.put(f"/api/notes/{n['id']}", headers=h, json={"content": A, "base_version": 1, "folder_id": None})
+    assert r.json()["note"]["folder_id"] is None and r.json()["note"]["status"] == "ready"
+    r = client.put(f"/api/notes/{n['id']}", headers=h, json={"content": A, "base_version": 2, "folder_id": fid})
+    assert r.json()["note"]["folder_id"] == fid
+    r = client.put(f"/api/notes/{n['id']}", headers=h, json={"content": A + " them", "base_version": 3})
+    assert r.json()["note"]["folder_id"] == fid
+
+    assert client.patch(f"/api/folders/{fid}", json={"name": "Đồ án tốt nghiệp"}, headers=h).json()["name"] == "Đồ án tốt nghiệp"
+    d = client.delete(f"/api/folders/{fid}", headers=h)
+    assert d.status_code == 200 and d.json() == {"moved": 2}
+    assert all(x["folder_id"] is None for x in client.get("/api/notes", headers=h).json())
+    assert len(client.get("/api/notes", headers=h).json()) == 2
+    feed = client.get("/api/sync/changes", params={"since": 0}, headers=h).json()["events"]
+    assert feed[-1]["type"] == "folder"
+

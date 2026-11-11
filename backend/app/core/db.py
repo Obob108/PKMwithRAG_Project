@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(user_id, session_id)
 """
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # v2: phien ban ghi chu (de gop ba chieu) + nhat ky su kien (de dong bo truc tiep).
 MIGRATION_V2 = """
@@ -91,6 +91,38 @@ CREATE TABLE IF NOT EXISTS events (
     device_id  TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, id);
+"""
+
+
+# v4: thu muc (mot cap) chua ghi chu. Xoa thu muc -> ghi chu ra ngoai (folder_id = NULL), khong mat.
+MIGRATION_V4_FOLDERS = """
+CREATE TABLE IF NOT EXISTS folders (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_folders_user ON folders(user_id);
+"""
+
+# Bang events duoc dung lai de them loai su kien 'folder' (SQLite khong sua duoc CHECK tai cho).
+# Voi su kien 'folder', note_id la id thu muc va version = 0.
+MIGRATION_V4_EVENTS = """
+CREATE TABLE events_v4 (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type       TEXT NOT NULL CHECK (type IN ('created', 'updated', 'deleted', 'folder')),
+    note_id    INTEGER NOT NULL,
+    version    INTEGER NOT NULL,
+    device_id  TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT INTO events_v4(id, user_id, type, note_id, version, device_id, created_at)
+    SELECT id, user_id, type, note_id, version, device_id, created_at FROM events;
+DROP TABLE events;
+ALTER TABLE events_v4 RENAME TO events;
 CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, id);
 """
 
@@ -134,6 +166,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "INSERT INTO note_versions(note_id, version, title, content) "
         "SELECT id, version, title, content FROM notes WHERE id NOT IN (SELECT note_id FROM note_versions)"
     )
+    # v4: thu muc
+    conn.executescript(MIGRATION_V4_FOLDERS)
+    if "folder_id" not in _columns(conn, "notes"):
+        conn.execute("ALTER TABLE notes ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_folder ON notes(folder_id)")
+    events_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'").fetchone()[0]
+    if "'folder'" not in events_sql:
+        conn.commit()
+        conn.executescript(MIGRATION_V4_EVENTS)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 

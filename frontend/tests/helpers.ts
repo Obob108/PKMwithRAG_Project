@@ -2,7 +2,7 @@
 import { SyncEngine } from "../src/lib/engine.ts";
 import { conflictBlock, hasConflictMarkers, mergeText } from "../src/lib/merge.ts";
 import { NetworkError } from "../src/lib/types.ts";
-import type { Api, LocalNote, RemoteEvent, RemoteNote, Store, UpdateResult } from "../src/lib/types.ts";
+import type { Api, Folder, LocalNote, RemoteEvent, RemoteNote, Store, UpdateResult } from "../src/lib/types.ts";
 
 type ServerNote = RemoteNote & { client_id: string | null };
 const pub = (n: ServerNote): RemoteNote => {
@@ -17,6 +17,8 @@ export class FakeServer {
   notes = new Map<number, ServerNote>();
   versions = new Map<string, { title: string; content: string }>();
   events: RemoteEvent[] = [];
+  folders = new Map<number, Folder>();
+  nextFolder = 1;
 
   ts(): string {
     return "2026-11-09 08:00:" + String(this.clock++ % 60).padStart(2, "0");
@@ -30,20 +32,41 @@ export class FakeServer {
     for (let i = 2; titles.has(c); i++) c = `${t} (${i})`;
     return c;
   }
-  create(input: { title: string; content: string; client_id: string | null }, device: string | null): RemoteNote {
+  validFolder(f: number | null | undefined): number | null {
+    return f !== null && f !== undefined && this.folders.has(f) ? f : null;
+  }
+  createFolder(name: string, device: string | null): Folder {
+    const f: Folder = { id: this.nextFolder++, name, created_at: this.ts() };
+    this.folders.set(f.id, f);
+    this.emit("folder", f.id, 0, device);
+    return f;
+  }
+  deleteFolder(id: number, device: string | null): void {
+    for (const n of this.notes.values()) {
+      if (n.folder_id !== id) continue;
+      n.folder_id = null;
+      n.version += 1;
+      this.versions.set(`${n.id}:${n.version}`, { title: n.title, content: n.content });
+      this.emit("updated", n.id, n.version, null); // device null: mọi thiết bị tải lại
+    }
+    this.folders.delete(id);
+    this.emit("folder", id, 0, device);
+  }
+  create(input: { title: string; content: string; client_id: string | null; folder_id?: number | null }, device: string | null): RemoteNote {
     for (const n of this.notes.values()) if (input.client_id && n.client_id === input.client_id) return pub(n);
     const id = this.nextId++;
     const n: ServerNote = {
       id, title: this.uniqueTitle(input.title), content: input.content, version: 1,
       has_conflict: hasConflictMarkers(input.content), status: "pending", updated_at: this.ts(),
       source: "md", has_file: false, file_name: null, client_id: input.client_id,
+      folder_id: this.validFolder(input.folder_id),
     };
     this.notes.set(id, n);
     this.versions.set(`${id}:1`, { title: n.title, content: n.content });
     this.emit("created", id, 1, device);
     return pub(n);
   }
-  update(id: number, input: { content: string; base_version: number; title?: string }, device: string | null): UpdateResult {
+  update(id: number, input: { content: string; base_version: number; title?: string; folder_id?: number | null }, device: string | null): UpdateResult {
     const n = this.notes.get(id);
     if (!n) return { kind: "notfound" };
     if (input.base_version < 1 || input.base_version > n.version) return { kind: "bad_version" };
@@ -62,8 +85,10 @@ export class FakeServer {
       if (base && input.title && input.title !== base.title && n.title === base.title) title = input.title.trim();
     }
     if (title !== n.title && [...this.notes.values()].some((o) => o.id !== id && o.title === title)) return { kind: "title_taken" };
-    if (content !== n.content || title !== n.title) {
+    const folder = "folder_id" in input ? this.validFolder(input.folder_id) : n.folder_id;
+    if (content !== n.content || title !== n.title || folder !== n.folder_id) {
       n.version += 1;
+      n.folder_id = folder;
       n.content = content;
       n.title = title;
       n.has_conflict = hasConflictMarkers(content);
@@ -116,7 +141,7 @@ export class FakeApi implements Api {
     const n = this.server.notes.get(id);
     return n ? pub(n) : null;
   }
-  async createNote(input: { title: string; content: string; client_id: string }): Promise<RemoteNote> {
+  async createNote(input: { title: string; content: string; client_id: string; folder_id?: number | null }): Promise<RemoteNote> {
     this.check();
     const r = this.server.create(input, this.device);
     if (this.dropNext) {
@@ -125,7 +150,9 @@ export class FakeApi implements Api {
     }
     return r;
   }
-  async updateNote(id: number, input: { content: string; base_version: number; title?: string }): Promise<UpdateResult> {
+  lastUpdate: { content: string; base_version: number; title?: string; folder_id?: number | null } | null = null;
+  async updateNote(id: number, input: { content: string; base_version: number; title?: string; folder_id?: number | null }): Promise<UpdateResult> {
+    this.lastUpdate = input;
     this.check();
     const r = this.server.update(id, input, this.device);
     if (this.gate) await this.gate;
@@ -138,6 +165,25 @@ export class FakeApi implements Api {
   async deleteNote(id: number): Promise<void> {
     this.check();
     this.server.remove(id, this.device);
+  }
+  async listFolders(): Promise<Folder[]> {
+    this.check();
+    return [...this.server.folders.values()].map((f) => ({ ...f }));
+  }
+  async createFolder(name: string): Promise<Folder> {
+    this.check();
+    return { ...this.server.createFolder(name, this.device) };
+  }
+  async renameFolder(id: number, name: string): Promise<Folder> {
+    this.check();
+    const f = this.server.folders.get(id)!;
+    f.name = name;
+    this.server.emit("folder", id, 0, this.device);
+    return { ...f };
+  }
+  async deleteFolder(id: number): Promise<void> {
+    this.check();
+    this.server.deleteFolder(id, this.device);
   }
 }
 

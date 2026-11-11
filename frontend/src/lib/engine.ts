@@ -6,7 +6,7 @@
 //  - Sự kiện từ thiết bị khác: ghi chú sạch thì tải lại; ghi chú đang sửa dở thì đẩy lên để máy chủ gộp.
 import { conflictBlock, hasConflictMarkers, mergeText } from "./merge.ts";
 import { ApiError, NetworkError } from "./types.ts";
-import type { Api, LocalNote, RemoteEvent, RemoteNote, Store } from "./types.ts";
+import type { Api, Folder, LocalNote, RemoteEvent, RemoteNote, Store } from "./types.ts";
 
 export interface EngineOptions {
   debounceMs?: number;
@@ -28,6 +28,7 @@ export class SyncEngine {
 
   notes = new Map<string, LocalNote>();
   snapshot: LocalNote[] = [];
+  folders: Folder[] = []; // danh sách thư mục (lưu kèm IndexedDB để xem được khi ngoại tuyến)
   listeners = new Set<() => void>();
 
   debounceMs: number;
@@ -61,6 +62,7 @@ export class SyncEngine {
     };
   };
   getSnapshot = (): LocalNote[] => this.snapshot;
+  getFolders = (): Folder[] => this.folders;
 
   pendingCount(): number {
     let n = 0;
@@ -106,9 +108,12 @@ export class SyncEngine {
   }
 
   async init(): Promise<void> {
-    for (const n of await this.store.all()) this.notes.set(n.key, n);
+    // Bản ghi lưu trước khi có thư mục: coi như nằm ngoài.
+    for (const n of await this.store.all()) this.notes.set(n.key, { ...n, folder_id: n.folder_id ?? null, base_folder_id: n.base_folder_id ?? null });
     const c = await this.store.getMeta("cursor");
     this.cursor = typeof c === "number" ? c : null;
+    const f = await this.store.getMeta("folders");
+    this.folders = Array.isArray(f) ? (f as Folder[]) : [];
     this.rebuild();
   }
 
@@ -126,12 +131,13 @@ export class SyncEngine {
   }
 
   // ---------------------------------------------------------------- thao tác của người dùng
-  create(title: string, content = ""): LocalNote {
+  create(title: string, content = "", folderId: number | null = null): LocalNote {
     const n: LocalNote = {
       key: `local:${this.uuid()}`, id: null, client_id: this.uuid(),
       title, content, base_title: title, base_content: "", base_version: 0,
       dirty: true, deleted: false, has_conflict: hasConflictMarkers(content), status: "pending",
       updated_ms: this.now(), source: "md", has_file: false, file_name: null,
+      folder_id: folderId, base_folder_id: null,
     };
     this.set(n);
     this.schedulePush(n.key);
@@ -147,6 +153,14 @@ export class SyncEngine {
       has_conflict: hasConflictMarkers(content), updated_ms: this.now(),
     });
     this.schedulePush(key);
+  }
+
+  /** Chuyển ghi chú vào thư mục (null = ra ngoài). Dùng được khi ngoại tuyến; không đổi thứ tự "mới nhất". */
+  move(key: string, folderId: number | null): void {
+    const n = this.notes.get(key);
+    if (!n || n.deleted || n.folder_id === folderId) return;
+    this.set({ ...n, folder_id: folderId, dirty: true });
+    this.schedulePush(key, 0);
   }
 
   remove(key: string): void {
@@ -252,20 +266,27 @@ export class SyncEngine {
   private async pushCreate(n: LocalNote): Promise<boolean> {
     const sentContent = n.content;
     const sentTitle = n.title;
-    const remote = await this.api.createNote({ title: sentTitle, content: sentContent, client_id: n.client_id ?? this.uuid() });
-    this.adopt(n.key, remote, sentContent, sentTitle);
+    const sentFolder = n.folder_id;
+    const remote = await this.api.createNote({
+      title: sentTitle, content: sentContent, client_id: n.client_id ?? this.uuid(), folder_id: sentFolder,
+    });
+    this.adopt(n.key, remote, sentContent, sentTitle, sentFolder);
     return true;
   }
 
   private async pushUpdate(n: LocalNote): Promise<boolean> {
     const sentContent = n.content;
     const sentTitle = n.title;
+    const sentFolder = n.folder_id;
     const id = n.id as number;
-    const res = await this.api.updateNote(id, { content: sentContent, base_version: n.base_version, title: sentTitle });
+    const input: { content: string; base_version: number; title: string; folder_id?: number | null } =
+      { content: sentContent, base_version: n.base_version, title: sentTitle };
+    if (sentFolder !== n.base_folder_id) input.folder_id = sentFolder; // chỉ gửi khi đổi thư mục
+    const res = await this.api.updateNote(id, input);
     const cur = this.notes.get(n.key);
     if (!cur) return false;
     if (res.kind === "ok") {
-      this.adopt(n.key, res.note, sentContent, sentTitle);
+      this.adopt(n.key, res.note, sentContent, sentTitle, sentFolder);
       return true;
     }
     if (res.kind === "notfound") {
@@ -274,8 +295,9 @@ export class SyncEngine {
     }
     if (res.kind === "title_taken") {
       const title = cur.title === sentTitle ? cur.base_title : cur.title;
-      this.set({ ...cur, title, dirty: cur.content !== cur.base_content || title !== cur.base_title });
-      return cur.content !== cur.base_content;
+      const rest = cur.content !== cur.base_content || cur.folder_id !== cur.base_folder_id;
+      this.set({ ...cur, title, dirty: rest || title !== cur.base_title });
+      return rest;
     }
     // bad_version: mốc đồng bộ của mình không còn hợp lệ; tải bản máy chủ và giữ cả hai
     const remote = await this.api.getNote(id);
@@ -286,25 +308,27 @@ export class SyncEngine {
     const content = remote.content === cur.content ? cur.content : conflictBlock(remote.content, cur.content);
     this.set({
       ...cur, content, base_title: remote.title, base_content: remote.content, base_version: remote.version,
-      dirty: true, has_conflict: hasConflictMarkers(content), status: remote.status,
+      base_folder_id: remote.folder_id, dirty: true, has_conflict: hasConflictMarkers(content), status: remote.status,
     });
     return true;
   }
 
   private recreate(n: LocalNote): void {
-    this.set({ ...n, id: null, client_id: this.uuid(), base_version: 0, base_content: "", base_title: n.title, dirty: true });
+    this.set({ ...n, id: null, client_id: this.uuid(), base_version: 0, base_content: "", base_title: n.title, base_folder_id: null, dirty: true });
   }
 
   /** Nhận phản hồi của máy chủ; nếu người dùng đã gõ thêm trong lúc chờ thì gộp lại bản gõ thêm. */
-  private adopt(key: string, remote: RemoteNote, sentContent: string, sentTitle: string): void {
+  private adopt(key: string, remote: RemoteNote, sentContent: string, sentTitle: string, sentFolder: number | null): void {
     const cur = this.notes.get(key);
     if (!cur) return;
     const content = cur.content === sentContent ? remote.content : mergeText(sentContent, remote.content, cur.content).text;
     const title = cur.title === sentTitle ? remote.title : cur.title;
+    // Máy chủ có thể đưa ra ngoài nếu thư mục đã bị xóa; nếu người dùng vừa kéo sang thư mục khác thì giữ lựa chọn mới.
+    const folderId = cur.folder_id === sentFolder ? remote.folder_id : cur.folder_id;
     this.set({
-      ...cur, id: remote.id, title, content,
-      base_title: remote.title, base_content: remote.content, base_version: remote.version,
-      dirty: content !== remote.content || title !== remote.title || cur.deleted,
+      ...cur, id: remote.id, title, content, folder_id: folderId,
+      base_title: remote.title, base_content: remote.content, base_version: remote.version, base_folder_id: remote.folder_id,
+      dirty: content !== remote.content || title !== remote.title || folderId !== remote.folder_id || cur.deleted,
       has_conflict: hasConflictMarkers(content), status: remote.status,
       source: remote.source, has_file: remote.has_file, file_name: remote.file_name,
     });
@@ -322,6 +346,7 @@ export class SyncEngine {
       base_title: r.title, base_content: r.content, base_version: r.version,
       dirty: false, deleted: false, has_conflict: r.has_conflict, status: r.status,
       updated_ms: this.serverMs(r.updated_at), source: r.source, has_file: r.has_file, file_name: r.file_name,
+      folder_id: r.folder_id ?? null, base_folder_id: r.folder_id ?? null,
     };
   }
 
@@ -346,9 +371,52 @@ export class SyncEngine {
     this.schedulePush(n.key, 0);
   }
 
+  // ---------------------------------------------------------------- thư mục (thao tác cần mạng)
+  private setFolders(list: Folder[]): void {
+    this.folders = [...list].sort((a, b) => a.name.localeCompare(b.name, "vi") || a.id - b.id);
+    this.writes = this.writes.then(() => this.store.setMeta("folders", this.folders)).catch((e) => console.error("IndexedDB", e));
+    this.rebuild();
+  }
+
+  async refreshFolders(): Promise<void> {
+    const list = await this.api.listFolders();
+    this.setFolders(list);
+    // Thư mục không còn trên máy chủ: ghi chú cục bộ trỏ tới nó được coi như nằm ngoài.
+    const ids = new Set(list.map((f) => f.id));
+    for (const n of [...this.notes.values()]) this.forgetFolder(n, ids);
+  }
+
+  private forgetFolder(n: LocalNote, alive: Set<number>): void {
+    const lost = (f: number | null) => f !== null && !alive.has(f);
+    if (!lost(n.folder_id) && !lost(n.base_folder_id)) return;
+    const folder_id = lost(n.folder_id) ? null : n.folder_id;
+    const base_folder_id = lost(n.base_folder_id) ? null : n.base_folder_id;
+    this.set({ ...n, folder_id, base_folder_id, dirty: n.dirty && (n.content !== n.base_content || n.title !== n.base_title || folder_id !== base_folder_id || n.id === null) });
+  }
+
+  async createFolder(name: string): Promise<Folder> {
+    const f = await this.api.createFolder(name);
+    this.setFolders([...this.folders.filter((x) => x.id !== f.id), f]);
+    return f;
+  }
+
+  async renameFolder(id: number, name: string): Promise<void> {
+    const f = await this.api.renameFolder(id, name);
+    this.setFolders(this.folders.map((x) => (x.id === id ? f : x)));
+  }
+
+  /** Xóa thư mục: ghi chú bên trong ra ngoài, không bị xóa. Máy chủ gửi sự kiện để mọi thiết bị tải lại. */
+  async deleteFolder(id: number): Promise<void> {
+    await this.api.deleteFolder(id);
+    const alive = new Set(this.folders.filter((x) => x.id !== id).map((x) => x.id));
+    this.setFolders(this.folders.filter((x) => x.id !== id));
+    for (const n of [...this.notes.values()]) this.forgetFolder(n, alive);
+  }
+
   /** Lần đồng bộ đầu (hoặc khi mất con trỏ): lấy toàn bộ ghi chú và đối chiếu với bản cục bộ. */
   async bootstrap(): Promise<void> {
     const cursor = await this.api.cursor(); // lấy con trỏ TRƯỚC khi liệt kê để không sót sự kiện
+    await this.refreshFolders();
     const remotes = await this.api.listNotes();
     const seen = new Set<number>();
     for (const r of remotes) {
@@ -370,11 +438,18 @@ export class SyncEngine {
       return;
     }
     const { events } = await this.api.changes(this.cursor);
-    for (const ev of events) await this.handleEvent(ev);
+    await this.refreshFolders();
+    for (const ev of events) if (ev.type !== "folder") await this.handleEvent(ev);
+    if (events.length) await this.setCursor(events[events.length - 1].id);
     await this.syncAll();
   }
 
   async handleEvent(ev: RemoteEvent): Promise<void> {
+    if (ev.type === "folder") {
+      if (!(ev.device_id && ev.device_id === this.deviceId)) await this.refreshFolders();
+      await this.setCursor(ev.id);
+      return;
+    }
     if (ev.device_id && ev.device_id === this.deviceId) {
       await this.setCursor(ev.id); // sự kiện do chính phiên này gây ra: đã nhận qua phản hồi
       return;

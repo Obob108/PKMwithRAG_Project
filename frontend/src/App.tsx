@@ -16,7 +16,7 @@ import { startLive } from "./lib/live.ts";
 import type { LiveState } from "./lib/live.ts";
 import { buildLinkIndex, extractOutline, extractTags, fold, fuzzyFilter, wordCount } from "./lib/text.ts";
 import { ApiError, NetworkError } from "./lib/types.ts";
-import type { LocalNote } from "./lib/types.ts";
+import type { Folder, LocalNote } from "./lib/types.ts";
 import { applyTheme, loadUi, saveUi } from "./lib/ui.ts";
 import type { LeftTab, RightTab, UiState } from "./lib/ui.ts";
 import { uuid } from "./lib/uuid.ts";
@@ -110,7 +110,7 @@ function Boot({ session, onLogout }: { session: Session; onLogout: () => void })
 
 // ================================================================== không gian làm việc
 type Tab = { id: string; kind: "note" | "pdf" | "graph"; key?: string };
-type Dialog = null | "switcher" | "palette" | "settings";
+type Dialog = null | "switcher" | "palette" | "settings" | "upload";
 
 function uniqueTitle(notes: LocalNote[], base: string): string {
   const taken = new Set(notes.map((n) => fold(n.title)));
@@ -124,6 +124,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
   const { engine, api } = live;
   const online = live.state === "live";
   const notes = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
+  const folders = useSyncExternalStore(engine.subscribe, engine.getFolders);
   const [ui, setUiState] = useState<UiState>(loadUi);
   const setUi = useCallback((patch: Partial<UiState>) => setUiState((u) => ({ ...u, ...patch })), []);
   useEffect(() => {
@@ -149,6 +150,8 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
   const [chatBusy, setChatBusy] = useState(false);
   const chatId = useRef(1);
   const fileInput = useRef<HTMLInputElement>(null);
+  const uploadFolder = useRef<number | null>(null); // thư mục đích của lần tải lên kế tiếp
+  const [uploadChoice, setUploadChoice] = useState<number | null>(null);
 
   const byKey = useMemo(() => new Map(notes.map((n) => [n.key, n])), [notes]);
   const linkIndex = useMemo(() => buildLinkIndex(notes), [notes]);
@@ -180,6 +183,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
   // Theo dõi trạng thái lập chỉ mục của các ghi chú vừa lưu.
   const notesRef = useRef(notes);
   notesRef.current = notes;
+  const activeKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!online) return;
     const t = window.setInterval(() => {
@@ -224,8 +228,8 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     if (key) openPdf(key);
   }, [engine, openPdf]);
 
-  const newNote = useCallback((title?: string, content = "") => {
-    const n = engine.create(uniqueTitle(notesRef.current, title?.trim() || "Chưa đặt tên"), content);
+  const newNote = useCallback((title?: string, content = "", folderId: number | null = null) => {
+    const n = engine.create(uniqueTitle(notesRef.current, title?.trim() || "Chưa đặt tên"), content, folderId);
     openKey(n.key);
     return n;
   }, [engine, openKey]);
@@ -263,7 +267,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     let last: string | null = null;
     for (const f of Array.from(files)) {
       try {
-        const r = await api.upload(f);
+        const r = await api.upload(f, uploadFolder.current);
         last = await engine.adoptRemote(r.id);
       } catch (e) {
         flash(e instanceof ApiError ? `${f.name}: ${e.detail}` : e instanceof NetworkError ? "Cần kết nối mạng để tải lên" : `${f.name}: lỗi tải lên`);
@@ -274,6 +278,62 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
       flash("Đã tải lên. Hệ thống đang lập chỉ mục và tự tìm liên kết…");
     }
   }, [api, engine, openKey, flash]);
+
+  /** folderId: undefined = hỏi người dùng chọn thư mục (nếu có thư mục), null/số = tải thẳng vào đó. */
+  const requestUpload = useCallback((folderId?: number | null) => {
+    if (folderId === undefined && engine.getFolders().length > 0) {
+      const active = notesRef.current.find((n) => n.key === activeKeyRef.current);
+      setUploadChoice(active?.folder_id ?? null);
+      setDialog("upload");
+      return;
+    }
+    uploadFolder.current = folderId ?? null;
+    fileInput.current?.click();
+  }, [engine]);
+
+  const dropFiles = useCallback((files: FileList, folderId: number | null) => {
+    uploadFolder.current = folderId;
+    void upload(Array.from(files));
+  }, [upload]);
+
+  // ---------------------------------------------------------------- thư mục
+  const folderError = (e: unknown): string =>
+    e instanceof ApiError ? e.detail : e instanceof NetworkError ? "Cần kết nối mạng để quản lý thư mục" : "Có lỗi xảy ra";
+  const createFolder = useCallback(async (name: string): Promise<string | null> => {
+    try {
+      const f = await engine.createFolder(name);
+      setUiState((u) => ({ ...u, collapsedFolders: u.collapsedFolders.filter((x) => x !== f.id) }));
+      return null;
+    } catch (e) {
+      return folderError(e);
+    }
+  }, [engine]);
+  const renameFolder = useCallback(async (id: number, name: string): Promise<string | null> => {
+    try {
+      await engine.renameFolder(id, name);
+      return null;
+    } catch (e) {
+      return folderError(e);
+    }
+  }, [engine]);
+  const deleteFolder = useCallback((f: Folder, count: number) => {
+    const msg = count > 0
+      ? `Xóa thư mục “${f.name}”?\n${count} ghi chú bên trong sẽ được chuyển ra ngoài, KHÔNG bị xóa.`
+      : `Xóa thư mục trống “${f.name}”?`;
+    if (!confirm(msg)) return;
+    engine.deleteFolder(f.id)
+      .then(() => flash(count > 0 ? `Đã xóa thư mục, ${count} ghi chú đã chuyển ra ngoài` : "Đã xóa thư mục"))
+      .catch((e) => flash(folderError(e)));
+  }, [engine, flash]);
+  const moveNote = useCallback((key: string, folderId: number | null) => {
+    engine.move(key, folderId);
+  }, [engine]);
+  const toggleFolder = useCallback((id: number) => {
+    setUiState((u) => ({
+      ...u,
+      collapsedFolders: u.collapsedFolders.includes(id) ? u.collapsedFolders.filter((x) => x !== id) : [...u.collapsedFolders, id],
+    }));
+  }, []);
 
   // ---------------------------------------------------------------- hỏi đáp
   const ask = useCallback(async (q: string) => {
@@ -292,6 +352,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
 
   // ---------------------------------------------------------------- dẫn xuất cho giao diện
   const active = tabs.find((t) => t.id === activeId) ?? null;
+  activeKeyRef.current = active?.key ?? null;
   const activeNote = active?.key ? byKey.get(active.key) ?? null : null;
   const noteForPanels = active?.kind === "note" ? activeNote : null;
   const tabViews: TabView[] = tabs.map((t) => {
@@ -316,7 +377,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     { name: "Mở Graph view", hint: "Ctrl+G", run: openGraph },
     { name: "Chuyển chế độ chỉnh sửa / xem", hint: "Ctrl+E", run: toggleMode },
     { name: "Chế độ chia đôi (soạn + xem)", hint: "", run: () => setUi({ mode: "split" }) },
-    { name: "Tải lên file .md / .pdf", hint: "", run: () => fileInput.current?.click() },
+    { name: "Tải lên file .md / .pdf", hint: "", run: () => requestUpload() },
     { name: "Hỏi đáp trên ghi chú", hint: "", run: openChat },
     { name: "Bật/tắt thanh bên trái", hint: "", run: () => setUi({ leftOpen: !ui.leftOpen }) },
     { name: "Bật/tắt thanh bên phải", hint: "", run: () => setUi({ rightOpen: !ui.rightOpen }) },
@@ -325,7 +386,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     { name: ui.theme === "dark" ? "Chuyển giao diện sáng" : "Chuyển giao diện tối", hint: "", run: () => setUi({ theme: ui.theme === "dark" ? "light" : "dark" }) },
     { name: "Cài đặt", hint: "Ctrl+,", run: () => setDialog("settings") },
     { name: "Đăng xuất", hint: "", run: onLogout },
-  ], [newNote, openGraph, toggleMode, openChat, setUi, syncNow, ui.leftOpen, ui.rightOpen, ui.theme, onLogout]);
+  ], [newNote, openGraph, toggleMode, openChat, setUi, syncNow, ui.leftOpen, ui.rightOpen, ui.theme, onLogout, requestUpload]);
 
   // ---------------------------------------------------------------- phím tắt
   useEffect(() => {
@@ -370,7 +431,9 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
       notes={notes} activeKey={active?.key ?? null} tab={ui.leftTab} setTab={(t) => setUi({ leftTab: t })}
       noteTags={noteTags} tagCounts={tagCounts} tagFilter={tagFilter} setTagFilter={setTagFilter}
       api={api} online={online} onOpenKey={openKey} onOpenId={(id) => void openId(id)}
-      onNew={() => newNote()} onUpload={() => fileInput.current?.click()}
+      onNew={(folderId) => newNote(undefined, "", folderId ?? null)} onUpload={requestUpload}
+      folders={folders} collapsed={ui.collapsedFolders} onToggleFolder={toggleFolder} onMove={moveNote}
+      onDropFiles={dropFiles} onCreateFolder={createFolder} onRenameFolder={renameFolder} onDeleteFolder={deleteFolder}
     />
   );
   const rightEl = ui.rightOpen && (
@@ -392,7 +455,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
         <Ribbon
           leftOpen={ui.leftOpen} graphActive={active?.kind === "graph"}
           onToggleLeft={() => setUi({ leftOpen: !ui.leftOpen })} onNew={() => newNote()}
-          onSwitcher={() => setDialog("switcher")} onGraph={openGraph} onUpload={() => fileInput.current?.click()}
+          onSwitcher={() => setDialog("switcher")} onGraph={openGraph} onUpload={() => requestUpload()}
           onChat={openChat} onPalette={() => setDialog("palette")} onSync={syncNow} onSettings={() => setDialog("settings")}
         />
         {leftEl && (
@@ -415,7 +478,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
                   <button className="primary" onClick={() => newNote()}>✚ Ghi chú mới <kbd>Ctrl+N</kbd></button>
                   <button onClick={() => setDialog("switcher")}>🔎 Mở nhanh <kbd>Ctrl+O</kbd></button>
                   <button onClick={openGraph}>🕸 Graph view <kbd>Ctrl+G</kbd></button>
-                  <button onClick={() => fileInput.current?.click()}>⬆ Tải lên .md / .pdf</button>
+                  <button onClick={() => requestUpload()}>⬆ Tải lên .md / .pdf</button>
                 </div>
               </div>
             )}
@@ -441,6 +504,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
                       fontSize={ui.fontSize} exists={(title) => linkIndex.titleToKey.has(fold(title))}
                       onOpenTitle={openTitle} onOpenPdf={openPdf} onDelete={deleteNote} onRenamed={renamed}
                       onTag={(tag) => { setTagFilter(tag); setUi({ leftOpen: true, leftTab: "files" }); }}
+                      folders={folders} onMove={moveNote}
                       jump={shown ? jump : null}
                     />
                   )}
@@ -472,6 +536,27 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
         <Switcher notes={notes} onClose={() => setDialog(null)}
                   onPick={(key) => { setDialog(null); openKey(key); }}
                   onCreate={(title) => { setDialog(null); newNote(title); }} />
+      )}
+      {dialog === "upload" && (
+        <Modal onClose={() => setDialog(null)}>
+          <h3>Tải lên file .md / .pdf</h3>
+          <div className="settings">
+            <label>Lưu vào
+              <select className="select" value={uploadChoice ?? ""} autoFocus
+                      onChange={(e) => setUploadChoice(e.target.value === "" ? null : Number(e.target.value))}>
+                <option value="">Ngoài cùng (không thuộc thư mục nào)</option>
+                {folders.map((f) => <option key={f.id} value={f.id}>📁 {f.name}</option>)}
+              </select>
+            </label>
+            <div className="muted small">Bạn cũng có thể kéo file từ máy tính thả thẳng vào một thư mục ở thanh Tệp.</div>
+            <div className="modal-actions">
+              <button onClick={() => setDialog(null)}>Hủy</button>
+              <button className="primary" onClick={() => { uploadFolder.current = uploadChoice; setDialog(null); fileInput.current?.click(); }}>
+                Chọn file…
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
       {dialog === "palette" && (
         <Modal onClose={() => setDialog(null)}>

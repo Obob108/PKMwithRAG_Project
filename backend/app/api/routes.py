@@ -34,12 +34,19 @@ class NoteCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(default="", max_length=500_000)
     client_id: str | None = Field(default=None, max_length=64)
+    folder_id: int | None = None
 
 
 class NoteUpdate(BaseModel):
     content: str = Field(max_length=500_000)
     base_version: int = Field(ge=1)
     title: str | None = Field(default=None, max_length=200)
+    # Chi gui khi doi thu muc; gui null = dua ghi chu ra ngoai. Khong gui = giu nguyen.
+    folder_id: int | None = None
+
+
+class FolderIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
 
 
 class RegisterRequest(BaseModel):
@@ -161,13 +168,14 @@ def create_note(body: NoteCreate, request: Request, background: BackgroundTasks,
                 user: dict = Depends(current_user), conn=Depends(get_conn),
                 x_device_id: str | None = Header(default=None)):
     note = notes_svc.create_note(conn, user["id"], body.title, body.content,
-                                 client_id=body.client_id, device_id=x_device_id)
+                                 client_id=body.client_id, device_id=x_device_id, folder_id=body.folder_id)
     background.add_task(run_index, request.app, user["id"], note["id"])
     return note
 
 
 @router.post("/notes/upload", status_code=201)
 def upload_note(request: Request, background: BackgroundTasks, file: UploadFile = File(...),
+                folder_id: int | None = Form(default=None),
                 user: dict = Depends(current_user), conn=Depends(get_conn),
                 x_device_id: str | None = Header(default=None)):
     s = request.app.state.settings
@@ -203,7 +211,7 @@ def upload_note(request: Request, background: BackgroundTasks, file: UploadFile 
         content, source = data.decode("utf-8", errors="replace"), "md"
     try:
         note = notes_svc.create_note(conn, user["id"], title, content, source=source, device_id=x_device_id,
-                                     file_path=file_path, file_name=file_name)
+                                     file_path=file_path, file_name=file_name, folder_id=folder_id)
     except Exception:
         if file_path:
             (s.upload_dir / file_path).unlink(missing_ok=True)
@@ -237,16 +245,18 @@ def get_note(note_id: int, user: dict = Depends(current_user), conn=Depends(get_
 def update_note(note_id: int, body: NoteUpdate, request: Request, background: BackgroundTasks,
                 user: dict = Depends(current_user), conn=Depends(get_conn),
                 x_device_id: str | None = Header(default=None)):
+    extra = {"folder_id": body.folder_id} if "folder_id" in body.model_fields_set else {}
     try:
         out = notes_svc.update_note(conn, user["id"], note_id, content=body.content,
-                                    base_version=body.base_version, title=body.title, device_id=x_device_id)
+                                    base_version=body.base_version, title=body.title, device_id=x_device_id,
+                                    **extra)
     except notes_svc.NotFound:
         raise _not_found()
     except notes_svc.BadVersion:
         raise HTTPException(status_code=409, detail="base_version không hợp lệ (lớn hơn phiên bản hiện tại)")
     except notes_svc.TitleTaken:
         raise HTTPException(status_code=409, detail="Đã có ghi chú khác dùng tiêu đề này")
-    if out["changed"]:
+    if out["reindex"]:  # chi doi thu muc thi khong can embed lai
         background.add_task(run_index, request.app, user["id"], note_id)
     return {"result": out["result"], "note": out["note"]}
 
@@ -277,6 +287,43 @@ def related(note_id: int, limit: int = Query(10, ge=1, le=50),
 def graph(min_score: float = Query(0.0, ge=0.0, le=1.0), user: dict = Depends(current_user),
           conn=Depends(get_conn)):
     return notes_svc.graph(conn, user["id"], min_score)
+
+
+# ------------------------------------------------------------------ thu muc
+def _folder_errors(fn):
+    try:
+        return fn()
+    except notes_svc.NotFound:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thư mục")
+    except notes_svc.FolderTaken:
+        raise HTTPException(status_code=409, detail="Đã có thư mục cùng tên")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/folders")
+def list_folders(user: dict = Depends(current_user), conn=Depends(get_conn)):
+    return notes_svc.list_folders(conn, user["id"])
+
+
+@router.post("/folders", status_code=201)
+def create_folder(body: FolderIn, user: dict = Depends(current_user), conn=Depends(get_conn),
+                  x_device_id: str | None = Header(default=None)):
+    return _folder_errors(lambda: notes_svc.create_folder(conn, user["id"], body.name, x_device_id))
+
+
+@router.patch("/folders/{folder_id}")
+def rename_folder(folder_id: int, body: FolderIn, user: dict = Depends(current_user), conn=Depends(get_conn),
+                  x_device_id: str | None = Header(default=None)):
+    return _folder_errors(lambda: notes_svc.rename_folder(conn, user["id"], folder_id, body.name, x_device_id))
+
+
+@router.delete("/folders/{folder_id}")
+def delete_folder(folder_id: int, user: dict = Depends(current_user), conn=Depends(get_conn),
+                  x_device_id: str | None = Header(default=None)):
+    """Xoa thu muc; ghi chu ben trong chuyen ra ngoai, khong bi xoa."""
+    moved = _folder_errors(lambda: notes_svc.delete_folder(conn, user["id"], folder_id, x_device_id))
+    return {"moved": moved}
 
 
 # ------------------------------------------------------------------ search / chat

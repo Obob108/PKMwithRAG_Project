@@ -1,6 +1,6 @@
 // Máy khách HTTP cho backend (đăng nhập, ghi chú, đồng bộ, hỏi đáp, SSE).
 import { ApiError, NetworkError } from "./types.ts";
-import type { Api, RemoteEvent, RemoteNote, UpdateResult } from "./types.ts";
+import type { Api, Folder, RemoteEvent, RemoteNote, UpdateResult } from "./types.ts";
 import type { GraphData } from "./graphModel.ts";
 
 export interface Session {
@@ -171,10 +171,10 @@ export class HttpApi implements Api {
     if (!res.ok) throw await readError(res);
     return (await res.json()) as RemoteNote;
   }
-  createNote(input: { title: string; content: string; client_id: string }): Promise<RemoteNote> {
+  createNote(input: { title: string; content: string; client_id: string; folder_id?: number | null }): Promise<RemoteNote> {
     return this.json<RemoteNote>("POST", "/api/notes", { json: input });
   }
-  async updateNote(id: number, input: { content: string; base_version: number; title?: string }): Promise<UpdateResult> {
+  async updateNote(id: number, input: { content: string; base_version: number; title?: string; folder_id?: number | null }): Promise<UpdateResult> {
     const res = await this.request("PUT", `/api/notes/${id}`, { json: input });
     if (res.ok) {
       const b = (await res.json()) as { result: "ok" | "merged" | "conflict"; note: RemoteNote };
@@ -186,6 +186,21 @@ export class HttpApi implements Api {
   }
   async deleteNote(id: number): Promise<void> {
     const res = await this.request("DELETE", `/api/notes/${id}`);
+    if (!res.ok && res.status !== 404) throw await readError(res);
+  }
+
+  // --- thư mục
+  listFolders(): Promise<Folder[]> {
+    return this.json("GET", "/api/folders");
+  }
+  createFolder(name: string): Promise<Folder> {
+    return this.json("POST", "/api/folders", { json: { name } });
+  }
+  renameFolder(id: number, name: string): Promise<Folder> {
+    return this.json("PATCH", `/api/folders/${id}`, { json: { name } });
+  }
+  async deleteFolder(id: number): Promise<void> {
+    const res = await this.request("DELETE", `/api/folders/${id}`);
     if (!res.ok && res.status !== 404) throw await readError(res);
   }
 
@@ -202,9 +217,10 @@ export class HttpApi implements Api {
   chat(question: string, useGraph?: boolean): Promise<{ answer: string; sources: ChatSource[] }> {
     return this.json("POST", "/api/chat", { json: { question, use_graph: useGraph ?? null } });
   }
-  upload(file: File): Promise<RemoteNote> {
+  upload(file: File, folderId: number | null = null): Promise<RemoteNote> {
     const form = new FormData();
     form.append("file", file);
+    if (folderId !== null) form.append("folder_id", String(folderId));
     return this.json("POST", "/api/notes/upload", { form });
   }
   /** PDF gốc, tải bằng fetch có token rồi hiển thị bằng blob URL (iframe không gửi được header). */

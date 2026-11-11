@@ -1,6 +1,6 @@
 import sqlite3
 
-from app.core.db import SCHEMA, connect, init_db
+from app.core.db import SCHEMA, SCHEMA_VERSION, connect, init_db
 from app.services import notes
 from app.services.indexer import delete_note as delete_note_index
 from app.services.indexer import index_note, upsert_note
@@ -157,7 +157,7 @@ def test_migration_from_v1_schema_backfills_versions_and_is_idempotent():
     init_db(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(notes)")}
     assert {"version", "has_conflict", "client_id"} <= cols
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     rows = conn.execute("SELECT note_id, version, content FROM note_versions").fetchall()
     assert [(r[0], r[1], r[2]) for r in rows] == [(1, 1, "noi dung cu")]
     r = notes.update_note(conn, 1, 1, content="moi", base_version=1)  # ghi chu cu dung duoc binh thuong
@@ -241,3 +241,111 @@ def test_note_without_file():
     assert n["has_file"] is False and notes.get_file(conn, 1, n["id"], __import__("pathlib").Path(".")) is None
     assert "content" not in notes.list_notes(conn, 1)[0]
     assert notes.list_notes(conn, 1, with_content=True)[0]["content"] == "c"
+
+
+# ---------------------------------------------------------------- thu muc
+def _expect(exc, fn):
+    try:
+        fn()
+    except exc:
+        return
+    raise AssertionError(f"expected {exc.__name__}")
+
+
+def test_folder_crud_unique_names_and_isolation():
+    conn = _conn()
+    f = notes.create_folder(conn, 1, "  Do   an  ")
+    assert f["name"] == "Do an"
+    _expect(notes.FolderTaken, lambda: notes.create_folder(conn, 1, "do AN"))
+    _expect(ValueError, lambda: notes.create_folder(conn, 1, "   "))
+    assert notes.create_folder(conn, 2, "Do an")["name"] == "Do an"  # user khac duoc trung ten
+    g = notes.create_folder(conn, 1, "An uong")
+    assert [x["name"] for x in notes.list_folders(conn, 1)] == ["An uong", "Do an"]
+    assert notes.rename_folder(conn, 1, g["id"], "Bep")["name"] == "Bep"
+    _expect(notes.FolderTaken, lambda: notes.rename_folder(conn, 1, g["id"], "do an"))
+    for fn in (lambda: notes.rename_folder(conn, 2, f["id"], "x"), lambda: notes.delete_folder(conn, 2, f["id"])):
+        _expect(notes.NotFound, fn)
+
+
+def test_create_in_folder_and_foreign_or_missing_folder_falls_back_to_root():
+    conn = _conn()
+    f = notes.create_folder(conn, 1, "F")
+    other = notes.create_folder(conn, 2, "Cua B")
+    assert notes.create_note(conn, 1, "A", "x", folder_id=f["id"])["folder_id"] == f["id"]
+    assert notes.create_note(conn, 1, "B", "x", folder_id=other["id"])["folder_id"] is None
+    assert notes.create_note(conn, 1, "C", "x", folder_id=999)["folder_id"] is None
+    assert notes.create_note(conn, 1, "D", "x")["folder_id"] is None
+
+
+def test_move_bumps_version_but_keeps_index_status_and_order():
+    conn = _conn()
+    f = notes.create_folder(conn, 1, "F")
+    n = notes.create_note(conn, 1, "A", "x")
+    conn.execute("UPDATE notes SET status = 'ready', updated_at = '2000-01-01 00:00:00' WHERE id = ?", (n["id"],))
+    conn.commit()
+    r = notes.update_note(conn, 1, n["id"], content="x", base_version=1, folder_id=f["id"], device_id="web")
+    assert r["changed"] and not r["reindex"]
+    assert r["note"]["folder_id"] == f["id"] and r["note"]["version"] == 2
+    assert r["note"]["status"] == "ready" and r["note"]["updated_at"] == "2000-01-01 00:00:00"
+    assert notes.changes_since(conn, 1, 0)[-1]["type"] == "updated"
+    # khong gui folder_id = giu nguyen; gui None = ra ngoai
+    r = notes.update_note(conn, 1, n["id"], content="y", base_version=2)
+    assert r["reindex"] and r["note"]["folder_id"] == f["id"] and r["note"]["status"] == "pending"
+    r = notes.update_note(conn, 1, n["id"], content="y", base_version=3, folder_id=None)
+    assert r["note"]["folder_id"] is None
+
+
+def test_offline_move_merges_with_content_edit_from_other_device():
+    conn = _conn()
+    f = notes.create_folder(conn, 1, "F")
+    n = notes.create_note(conn, 1, "A", "a\nb\n")
+    notes.update_note(conn, 1, n["id"], content="a\nB\n", base_version=1, device_id="desktop")
+    r = notes.update_note(conn, 1, n["id"], content="a\nb\n", base_version=1, folder_id=f["id"], device_id="phone")
+    assert r["note"]["content"] == "a\nB\n" and r["note"]["folder_id"] == f["id"]
+
+
+def test_delete_folder_moves_notes_out_without_losing_them():
+    conn = _conn()
+    f = notes.create_folder(conn, 1, "F")
+    a = notes.create_note(conn, 1, "A", "noi dung a", folder_id=f["id"])
+    b = notes.create_note(conn, 1, "B", "noi dung b", folder_id=f["id"])
+    c = notes.create_note(conn, 1, "C", "c")
+    cursor = notes.latest_event_id(conn, 1)
+    assert notes.delete_folder(conn, 1, f["id"], device_id="web") == 2
+    assert notes.list_folders(conn, 1) == []
+    left = {x["title"]: x for x in notes.list_notes(conn, 1, with_content=True)}
+    assert set(left) == {"A", "B", "C"} and all(x["folder_id"] is None for x in left.values())
+    assert left["A"]["content"] == "noi dung a" and left["A"]["version"] == 2 and left["C"]["version"] == 1
+    ev = notes.changes_since(conn, 1, cursor)
+    assert sorted((e["type"], e["note_id"]) for e in ev if e["type"] == "updated") == [("updated", a["id"]), ("updated", b["id"])]
+    assert all(e["device_id"] is None for e in ev if e["type"] == "updated")  # moi thiet bi deu tai lai
+    assert ev[-1]["type"] == "folder" and ev[-1]["note_id"] == f["id"]
+    # thiet bi ngoai tuyen van o base 1, sua noi dung: gop binh thuong, khong keo lai thu muc da xoa
+    r = notes.update_note(conn, 1, a["id"], content="noi dung a sua", base_version=1, folder_id=f["id"])
+    assert r["note"]["content"] == "noi dung a sua" and r["note"]["folder_id"] is None
+    _expect(notes.NotFound, lambda: notes.delete_folder(conn, 1, f["id"]))
+    assert c["folder_id"] is None
+
+
+def test_migration_from_v3_rebuilds_events_and_keeps_ids():
+    from app.core import db as dbm
+    conn = connect(":memory:")
+    conn.executescript(SCHEMA)
+    for col in ("version INTEGER NOT NULL DEFAULT 1", "has_conflict INTEGER NOT NULL DEFAULT 0",
+                "client_id TEXT", "file_path TEXT", "file_name TEXT"):
+        conn.execute(f"ALTER TABLE notes ADD COLUMN {col}")
+    conn.executescript(dbm.MIGRATION_V2)
+    conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x')")
+    conn.execute("INSERT INTO notes(user_id, title, content) VALUES (1, 'Cu', 'c')")
+    conn.execute("INSERT INTO note_versions(note_id, version, title, content) VALUES (1, 1, 'Cu', 'c')")
+    for _ in range(3):
+        conn.execute("INSERT INTO events(user_id, type, note_id, version) VALUES (1, 'created', 1, 1)")
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    init_db(conn)
+    init_db(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert [e["id"] for e in notes.changes_since(conn, 1, 0)] == [1, 2, 3]
+    f = notes.create_folder(conn, 1, "Moi")
+    assert notes.changes_since(conn, 1, 3)[0]["id"] == 4 and notes.get_note(conn, 1, 1)["folder_id"] is None
+    assert notes.update_note(conn, 1, 1, content="c", base_version=1, folder_id=f["id"])["note"]["folder_id"] == f["id"]

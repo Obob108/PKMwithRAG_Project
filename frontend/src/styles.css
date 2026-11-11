@@ -125,6 +125,27 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
 .chip { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-bg); color: var(--accent); border-radius: 12px; padding: 2px 4px 2px 10px; }
 .chip button { border: 0; background: transparent; padding: 0 6px; }
 .file-list { list-style: none; margin: 0; padding: 0; }
+.file-item[draggable="true"] { cursor: pointer; }
+.file-item.nested { padding-left: 30px; }
+.file-item.dragging { opacity: 0.45; }
+.folder { border-radius: 6px; }
+.folder.drop-over, .drop-root.drop-over { background: var(--accent-bg); outline: 1px dashed var(--accent); }
+.folder-row { display: flex; align-items: center; border-radius: 6px; }
+.folder-row:hover { background: var(--bg3); }
+.folder-head { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-align: left; background: transparent; border: 0; padding: 6px 8px; font-weight: 600; }
+.folder-head .caret { width: 10px; color: var(--muted); font-size: 11px; flex: none; }
+.folder-head .badge { font-weight: 400; }
+.folder-actions { display: flex; gap: 1px; padding-right: 4px; opacity: 0; transition: opacity 0.1s; }
+.folder-row:hover .folder-actions, .folder-row:focus-within .folder-actions { opacity: 1; }
+.folder-actions button { border: 0; background: transparent; padding: 2px 5px; font-size: 12px; color: var(--muted); }
+.folder-actions button:hover { color: var(--fg); background: var(--bg2); }
+.folder-actions button.danger:hover { color: var(--danger); }
+.folder-empty { padding: 4px 8px 6px 34px; }
+.folder-input { padding: 2px 4px 4px; display: flex; flex-direction: column; gap: 4px; }
+.folder-input input { padding: 5px 8px; }
+.drop-root { margin: 4px 0; padding: 8px; text-align: center; color: var(--muted); font-size: 12px; border: 1px dashed var(--border); border-radius: 6px; }
+.select { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; color: inherit; font: inherit; max-width: 100%; }
+.folder-select { max-width: 180px; font-size: 13px; }
 .file-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 6px; padding: 6px 8px; }
 .file-item:hover { background: var(--bg3); }
 .file-item.active { background: var(--accent-bg); color: var(--accent); }
@@ -263,6 +284,10 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
 .toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 60; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; max-width: 90vw; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); }
 
 /* ---------------------------------------------------------------- điện thoại: sidebar thành ngăn kéo */
+@media (hover: none) {
+  .folder-actions { opacity: 1; }
+}
+
 @media (max-width: 799px) {
   body { font-size: 15px; }
   .ribbon { width: 40px; }

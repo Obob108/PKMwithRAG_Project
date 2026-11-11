@@ -14,6 +14,7 @@ export interface UiState {
   leftW: number;
   rightW: number;
   chatUseGraph: boolean;
+  collapsedFolders: number[]; // thư mục đang thu gọn ở thanh Tệp
 }
 
 const KEY = "pkm.ui";
@@ -23,6 +24,7 @@ export function defaultUi(): UiState {
   return {
     theme: "dark", fontSize: 16, mode: "edit", leftOpen: !narrow(), rightOpen: false,
     leftTab: "files", rightTab: "links", leftW: 270, rightW: 300, chatUseGraph: false,
+    collapsedFolders: [],
   };
 }
 

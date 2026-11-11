@@ -53,6 +53,12 @@ Ghi chú: GET /notes[?full=true] | POST /notes | POST /notes/upload (.md/.txt/.p
   PDF upload: lưu file gốc tại uploads/<user_id>/<uuid>.pdf (đường dẫn tương đối trong DB, chống path traversal),
   GET /notes/{id}/file trả PDF (chỉ chủ sở hữu); xóa ghi chú xóa luôn file. Ghi chú có has_file, file_name.
   PUT nhận {content, base_version, title?} → {result: ok|merged|conflict, note}
+Thư mục (một cấp): GET /folders | POST /folders {name} | PATCH /folders/{id} {name} | DELETE /folders/{id} → {moved}
+  Tên không trùng trong cùng user (không phân biệt hoa/thường). Xóa thư mục KHÔNG xóa ghi chú: ghi chú bên trong
+  chuyển ra ngoài (folder_id = NULL, tăng version, sự kiện 'updated' với device_id NULL để mọi thiết bị tải lại).
+  POST /notes và POST /notes/upload (form) nhận folder_id; PUT /notes/{id} nhận folder_id CHỈ khi đổi thư mục
+  (null = ra ngoài; thiết bị gửi sau thắng). Chỉ đổi thư mục thì không lập chỉ mục lại, không đổi updated_at.
+  Thư mục không tồn tại/của user khác → ghi chú nằm ngoài. Sự kiện loại 'folder' báo danh sách thư mục đổi.
 Liên kết: GET /notes/{id}/related | GET /graph?min_score= (nút: id, title, source, has_file, degree)
 Hỏi đáp: GET /search?q= | POST /chat {question, use_graph?} (mặc định vector thuần)
 Đồng bộ: GET /sync/changes[?since=] | GET /events (SSE)
@@ -63,7 +69,7 @@ Mọi truy vấn lọc theo user_id lấy từ token; file PDF upload lưu theo 
 Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện thoại:
 - Đăng nhập / Đăng ký (có mã mời nếu máy chủ bật).
 - Ribbon (thanh công cụ dọc): bật/tắt sidebar, ghi chú mới, mở nhanh, Graph, tải lên, hỏi đáp, bảng lệnh, đồng bộ, cài đặt.
-- Sidebar trái: Tệp (sắp xếp, lọc theo thẻ), Tìm kiếm (từ khóa trên máy + tìm ngữ nghĩa qua API), Thẻ.
+- Sidebar trái: Tệp (cây thư mục một cấp: tạo/đổi tên/xóa, kéo thả ghi chú vào/ra thư mục, kéo file từ máy thả vào thư mục để tải lên; sắp xếp, lọc theo thẻ), Tìm kiếm (từ khóa trên máy + tìm ngữ nghĩa qua API), Thẻ.
 - Sidebar phải: Liên kết (backlink, liên kết đi, [[chưa tạo]], ghi chú liên quan tự động kèm điểm), Dàn ý, Hỏi đáp (nguồn bấm được).
 - Tab: ghi chú, PDF gốc, Graph view. Editor: soạn / xem / chia đôi, thanh định dạng, tự hoàn thành [[, #thẻ, callout, bảng,
   việc cần làm; đổi tên ghi chú tự cập nhật [[liên kết]] ở ghi chú khác. Thanh trạng thái: đồng bộ trực tiếp/ngoại tuyến, số thay đổi chờ,
@@ -125,6 +131,7 @@ Máy chủ là nguồn sự thật. Mỗi ghi chú có `version` tăng dần; m�
 - [ ] Chạy run_eval --part all --compare để có số liệu cuối trên 39 câu; chạy sample_links để chọn τ; chấm tay chất lượng câu trả lời
 - [x] Auth + API + đồng bộ + đăng ký + lưu PDF gốc. Schema v3 (file_path, file_name), migration idempotent từ v1/v2. Sandbox: 85 test backend pass, 1 skip (API test cần fastapi, chạy trên máy bạn).
 - [x] Frontend (gói 10): thư viện thuần TS có 60 test pass (merge, engine offline/đồng bộ, api, text, markdown, graphModel); toàn bộ component biên dịch bằng esbuild và render thử bằng react-dom/server. CHƯA chạy trong trình duyệt thật: cần `npm install && npm run dev` và xem bằng mắt.
+- [x] Thư mục (schema v4: bảng folders, notes.folder_id, events thêm loại 'folder'; migration giữ nguyên id sự kiện). Chọn thư mục khi tải lên, ô chọn thư mục trong editor (dùng trên điện thoại vì không kéo thả được). Đổi thư mục dùng được ngoại tuyến (đồng bộ như sửa nội dung); tạo/đổi tên/xóa thư mục cần mạng.
 - [ ] Việc còn lại: kiểm thử tay trên trình duyệt + điện thoại, chọn τ (sample_links), chấm tay chất lượng câu trả lời, thêm ghi chú đa chủ đề, deploy VPS (để sau).
 
 Ghi chú thiết kế:

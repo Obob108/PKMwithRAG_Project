@@ -24,12 +24,20 @@ class BadVersion(Exception):
     pass
 
 
+class FolderTaken(Exception):
+    pass
+
+
+_UNSET = object()  # phan biet "khong gui folder_id" voi "gui null" (= dua ra ngoai)
+
+
 def _public(row, with_content: bool = True) -> dict:
     d = {
         "id": row["id"], "title": row["title"], "source": row["source"], "status": row["status"],
         "version": row["version"], "has_conflict": bool(row["has_conflict"]), "error": row["error"],
         "created_at": row["created_at"], "updated_at": row["updated_at"],
         "has_file": bool(row["file_path"]), "file_name": row["file_name"],
+        "folder_id": row["folder_id"],
     }
     if with_content:
         d["content"] = row["content"]
@@ -64,9 +72,18 @@ def unique_title(conn, user_id: int, title: str) -> str:
     return candidate
 
 
+def _valid_folder(conn, user_id: int, folder_id) -> int | None:
+    """Thu muc cua chinh user thi giu, khong ton tai (vd da bi xoa tren thiet bi khac) thi dua ra ngoai."""
+    if folder_id is None:
+        return None
+    row = conn.execute("SELECT id FROM folders WHERE id = ? AND user_id = ?", (folder_id, user_id)).fetchone()
+    return row["id"] if row else None
+
+
 def create_note(conn, user_id: int, title: str, content: str = "", *, source: str = "md",
                 client_id: str | None = None, device_id: str | None = None,
-                file_path: str | None = None, file_name: str | None = None) -> dict:
+                file_path: str | None = None, file_name: str | None = None,
+                folder_id: int | None = None) -> dict:
     """Tao ghi chu. client_id (uuid do thiet bi sinh) giup gui lai khi mat mang khong tao trung."""
     if client_id:
         row = conn.execute(
@@ -75,10 +92,10 @@ def create_note(conn, user_id: int, title: str, content: str = "", *, source: st
             return _public(row)
     title = unique_title(conn, user_id, title)
     cur = conn.execute(
-        "INSERT INTO notes(user_id, title, content, source, client_id, has_conflict, file_path, file_name) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notes(user_id, title, content, source, client_id, has_conflict, file_path, file_name, "
+        "folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (user_id, title, content, source, client_id, int(merge.has_conflict_markers(content)),
-         file_path, file_name),
+         file_path, file_name, _valid_folder(conn, user_id, folder_id)),
     )
     _record(conn, user_id, cur.lastrowid, 1, title, content, "created", device_id)
     conn.commit()
@@ -96,8 +113,12 @@ def list_notes(conn, user_id: int, with_content: bool = False) -> list[dict]:
 
 
 def update_note(conn, user_id: int, note_id: int, *, content: str, base_version: int,
-                title: str | None = None, device_id: str | None = None) -> dict:
-    """Tra ve {"result": "ok"|"merged"|"conflict", "changed": bool, "note": {...}}."""
+                title: str | None = None, device_id: str | None = None, folder_id=_UNSET) -> dict:
+    """Tra ve {"result": "ok"|"merged"|"conflict", "changed": bool, "reindex": bool, "note": {...}}.
+
+    folder_id: chi gui khi thiet bi doi thu muc (None = dua ra ngoai); thiet bi gui sau thang.
+    Chi doi thu muc thi van tang version (de thiet bi khac biet) nhung KHONG lap chi muc lai.
+    """
     row = _get_row(conn, user_id, note_id)
     current = row["version"]
     if base_version < 1 or base_version > current:
@@ -131,18 +152,23 @@ def update_note(conn, user_id: int, note_id: int, *, content: str, base_version:
     ).fetchone():
         raise TitleTaken(new_title)
 
-    if new_content == row["content"] and new_title == row["title"]:
-        return {"result": result, "changed": False, "note": _public(row)}
+    new_folder = row["folder_id"] if folder_id is _UNSET else _valid_folder(conn, user_id, folder_id)
+    reindex = new_content != row["content"] or new_title != row["title"]
+    if not reindex and new_folder == row["folder_id"]:
+        return {"result": result, "changed": False, "reindex": False, "note": _public(row)}
 
     version = current + 1
     conn.execute(
-        "UPDATE notes SET title = ?, content = ?, version = ?, status = 'pending', has_conflict = ?, "
-        "error = NULL, updated_at = datetime('now') WHERE id = ?",
-        (new_title, new_content, version, int(merge.has_conflict_markers(new_content)), note_id),
+        "UPDATE notes SET title = ?, content = ?, version = ?, folder_id = ?, has_conflict = ?, "
+        "status = CASE WHEN ? THEN 'pending' ELSE status END, error = CASE WHEN ? THEN NULL ELSE error END, "
+        "updated_at = CASE WHEN ? THEN datetime('now') ELSE updated_at END WHERE id = ?",
+        (new_title, new_content, version, new_folder, int(merge.has_conflict_markers(new_content)),
+         int(reindex), int(reindex), int(reindex), note_id),
     )
     _record(conn, user_id, note_id, version, new_title, new_content, "updated", device_id)
     conn.commit()
-    return {"result": result, "changed": True, "note": _public(_get_row(conn, user_id, note_id))}
+    return {"result": result, "changed": True, "reindex": reindex,
+            "note": _public(_get_row(conn, user_id, note_id))}
 
 
 def delete_note(conn, user_id: int, note_id: int, device_id: str | None = None,
@@ -173,6 +199,75 @@ def get_file(conn, user_id: int, note_id: int, upload_dir: Path) -> tuple[Path, 
     if path is None or not path.is_file():
         return None
     return path, row["file_name"] or f"{row['title']}.pdf"
+
+
+# ---------------------------------------------------------------- thu muc
+def _folder_public(row) -> dict:
+    return {"id": row["id"], "name": row["name"], "created_at": row["created_at"]}
+
+
+def _folder_row(conn, user_id: int, folder_id: int):
+    row = conn.execute("SELECT * FROM folders WHERE id = ? AND user_id = ?", (folder_id, user_id)).fetchone()
+    if row is None:
+        raise NotFound(folder_id)
+    return row
+
+
+def _check_folder_name(conn, user_id: int, name: str, exclude_id: int | None = None) -> str:
+    name = " ".join((name or "").split())[:100]
+    if not name:
+        raise ValueError("Tên thư mục không được rỗng")
+    for r in conn.execute("SELECT id, name FROM folders WHERE user_id = ?", (user_id,)):
+        if r["id"] != exclude_id and r["name"].casefold() == name.casefold():
+            raise FolderTaken(name)
+    return name
+
+
+def _folder_event(conn, user_id: int, folder_id: int, device_id: str | None) -> None:
+    conn.execute("INSERT INTO events(user_id, type, note_id, version, device_id) VALUES (?, 'folder', ?, 0, ?)",
+                 (user_id, folder_id, device_id))
+
+
+def list_folders(conn, user_id: int) -> list[dict]:
+    rows = conn.execute("SELECT * FROM folders WHERE user_id = ? ORDER BY name COLLATE NOCASE, id", (user_id,))
+    return [_folder_public(r) for r in rows]
+
+
+def create_folder(conn, user_id: int, name: str, device_id: str | None = None) -> dict:
+    name = _check_folder_name(conn, user_id, name)
+    cur = conn.execute("INSERT INTO folders(user_id, name) VALUES (?, ?)", (user_id, name))
+    _folder_event(conn, user_id, cur.lastrowid, device_id)
+    conn.commit()
+    return _folder_public(_folder_row(conn, user_id, cur.lastrowid))
+
+
+def rename_folder(conn, user_id: int, folder_id: int, name: str, device_id: str | None = None) -> dict:
+    row = _folder_row(conn, user_id, folder_id)
+    name = _check_folder_name(conn, user_id, name, exclude_id=folder_id)
+    if name != row["name"]:
+        conn.execute("UPDATE folders SET name = ? WHERE id = ?", (name, folder_id))
+        _folder_event(conn, user_id, folder_id, device_id)
+        conn.commit()
+    return _folder_public(_folder_row(conn, user_id, folder_id))
+
+
+def delete_folder(conn, user_id: int, folder_id: int, device_id: str | None = None) -> int:
+    """Xoa thu muc; cac ghi chu ben trong ra ngoai (khong bi xoa). Tra ve so ghi chu da chuyen.
+
+    Moi ghi chu chuyen ra tang version + ghi su kien 'updated' voi device_id NULL, de MOI thiet bi
+    (ke ca thiet bi vua xoa) tai lai ban moi.
+    """
+    _folder_row(conn, user_id, folder_id)
+    moved = conn.execute("SELECT * FROM notes WHERE user_id = ? AND folder_id = ?", (user_id, folder_id)).fetchall()
+    for r in moved:
+        version = r["version"] + 1
+        conn.execute("UPDATE notes SET folder_id = NULL, version = ? WHERE id = ?",
+                     (version, r["id"]))
+        _record(conn, user_id, r["id"], version, r["title"], r["content"], "updated", None)
+    conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+    _folder_event(conn, user_id, folder_id, device_id)
+    conn.commit()
+    return len(moved)
 
 
 # ---------------------------------------------------------------- su kien / dong bo
@@ -242,7 +337,8 @@ def graph(conn, user_id: int, min_score: float = 0.0) -> dict:
         degree[a] = degree.get(a, 0) + 1
         degree[b] = degree.get(b, 0) + 1
     nodes = [{"id": r["id"], "title": r["title"], "source": r["source"], "has_file": bool(r["file_path"]),
-              "degree": degree.get(r["id"], 0)}
+              "folder_id": r["folder_id"], "degree": degree.get(r["id"], 0)}
              for r in conn.execute(
-                 "SELECT id, title, source, file_path FROM notes WHERE user_id = ? ORDER BY id", (user_id,))]
+                 "SELECT id, title, source, file_path, folder_id FROM notes WHERE user_id = ? ORDER BY id",
+                 (user_id,))]
     return {"nodes": nodes, "edges": list(pairs.values())}

@@ -4,7 +4,7 @@ import Markdown from "./Markdown.tsx";
 import type { SyncEngine } from "../lib/engine.ts";
 import { resolveConflicts } from "../lib/merge.ts";
 import { fuzzyFilter } from "../lib/text.ts";
-import type { LocalNote } from "../lib/types.ts";
+import type { Folder, LocalNote } from "../lib/types.ts";
 import type { Mode } from "../lib/ui.ts";
 
 interface Props {
@@ -21,6 +21,8 @@ interface Props {
   onRenamed: (key: string, oldTitle: string, newTitle: string) => void;
   onTag: (tag: string) => void;
   jump: { line: number; nonce: number } | null;
+  folders: Folder[];
+  onMove: (key: string, folderId: number | null) => void;
 }
 
 interface Autocomplete {
@@ -182,6 +184,13 @@ export default function EditorPane(p: Props) {
                onChange={(e) => engine.edit(note.key, { title: e.target.value })}
                onBlur={commitTitle}
                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+        {(p.folders.length > 0 || note.folder_id !== null) && (
+          <select className="select folder-select" value={note.folder_id ?? ""} title="Thư mục chứa ghi chú này"
+                  aria-label="Thư mục" onChange={(e) => p.onMove(note.key, e.target.value === "" ? null : Number(e.target.value))}>
+            <option value="">📄 Ngoài cùng</option>
+            {p.folders.map((f) => <option key={f.id} value={f.id}>📁 {f.name}</option>)}
+          </select>
+        )}
         <div className="seg" role="group" aria-label="Chế độ">
           <button className={p.mode === "edit" ? "active" : ""} title="Chỉnh sửa" onClick={() => p.setMode("edit")}>✎</button>
           <button className={p.mode === "split" ? "active" : ""} title="Chia đôi" onClick={() => p.setMode("split")}>◫</button>

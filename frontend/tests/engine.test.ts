@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { SyncEngine } from "../src/lib/engine.ts";
 import { FakeServer, MemStore, firstKey, mk } from "./helpers.ts";
+import type { LocalNote } from "../src/lib/types.ts";
 
 test("create and edit push to the server and stay clean", async () => {
   const server = new FakeServer();
@@ -299,4 +300,136 @@ test("refreshStatus picks up indexing progress without touching content", async 
   server.notes.get(1)!.status = "failed";
   await A.engine.refreshStatus(key); // ngoại tuyến: không lỗi, không đổi
   assert.equal(A.engine.notes.get(key)!.status, "ready");
+});
+
+// ---------------------------------------------------------------- thư mục
+test("create in a folder, move between folders, and only send folder_id when it changed", async () => {
+  const server = new FakeServer();
+  const A = mk(server, "A");
+  await A.engine.init();
+  await A.engine.bootstrap();
+  const f1 = await A.engine.createFolder("Đồ án");
+  const f2 = await A.engine.createFolder("Ăn uống");
+  assert.deepEqual(A.engine.getFolders().map((f) => f.name), ["Ăn uống", "Đồ án"]);
+  const n = A.engine.create("KH", "x", f1.id);
+  await A.engine.settle();
+  assert.equal(server.notes.get(1)!.folder_id, f1.id);
+
+  A.engine.edit(n.key, { content: "x sửa" });
+  await A.engine.settle();
+  assert.equal("folder_id" in A.api.lastUpdate!, false);
+
+  const before = A.engine.notes.get(n.key)!.updated_ms;
+  A.engine.move(n.key, f2.id);
+  await A.engine.settle();
+  assert.equal(A.api.lastUpdate!.folder_id, f2.id);
+  assert.equal(server.notes.get(1)!.folder_id, f2.id);
+  const local = A.engine.notes.get(n.key)!;
+  assert.deepEqual([local.folder_id, local.base_folder_id, local.dirty, local.updated_ms], [f2.id, f2.id, false, before]);
+
+  A.engine.move(n.key, null);
+  await A.engine.settle();
+  assert.equal(A.api.lastUpdate!.folder_id, null);
+  assert.equal(server.notes.get(1)!.folder_id, null);
+});
+
+test("offline move is pushed later and other devices pick it up", async () => {
+  const server = new FakeServer();
+  const A = mk(server, "A");
+  const B = mk(server, "B");
+  await A.engine.init(); await B.engine.init();
+  await A.engine.bootstrap();
+  const f = await A.engine.createFolder("F");
+  A.engine.create("KH", "a\n");
+  await A.engine.settle();
+  await B.engine.bootstrap();
+  assert.deepEqual(B.engine.getFolders().map((x) => x.name), ["F"]);
+
+  A.api.offline = true;
+  A.engine.move(firstKey(A.engine), f.id);
+  await A.engine.settle();
+  assert.equal(A.engine.pendingCount(), 1);
+  assert.equal(server.notes.get(1)!.folder_id, null);
+  A.api.offline = false;
+  await A.engine.syncAll(); await A.engine.settle();
+  assert.equal(server.notes.get(1)!.folder_id, f.id);
+
+  await B.engine.catchUp(); await B.engine.settle();
+  assert.equal(B.engine.notes.get(firstKey(B.engine))!.folder_id, f.id);
+});
+
+test("deleting a folder moves its notes out on every device; nothing is lost", async () => {
+  const server = new FakeServer();
+  const A = mk(server, "A");
+  const B = mk(server, "B");
+  await A.engine.init(); await B.engine.init();
+  await A.engine.bootstrap();
+  const f = await A.engine.createFolder("F");
+  A.engine.create("N1", "một", f.id);
+  A.engine.create("N2", "hai", f.id);
+  await A.engine.settle();
+  await B.engine.bootstrap(); await B.engine.settle();
+
+  B.api.offline = true;
+  const k2 = B.engine.keyById(2)!;
+  B.engine.edit(k2, { content: "hai sửa ở B" }); // B đang sửa dở khi thư mục bị xóa
+  await B.engine.settle();
+
+  await A.engine.deleteFolder(f.id);
+  assert.deepEqual(A.engine.getFolders(), []);
+  assert.ok([...A.engine.notes.values()].every((n) => n.folder_id === null));
+  for (const ev of server.events.filter((e) => e.id > (A.engine.cursor ?? 0))) await A.engine.handleEvent(ev);
+  await A.engine.settle();
+  assert.equal(A.engine.getSnapshot().length, 2);
+  assert.ok(A.engine.getSnapshot().every((n) => !n.dirty && n.base_version === 2));
+
+  B.api.offline = false;
+  await B.engine.catchUp(); await B.engine.settle();
+  assert.deepEqual(B.engine.getFolders(), []);
+  assert.ok(B.engine.getSnapshot().every((n) => n.folder_id === null));
+  assert.equal(server.notes.size, 2);
+  assert.equal(server.notes.get(2)!.content, "hai sửa ở B");
+  assert.equal(server.notes.get(2)!.folder_id, null);
+  assert.equal(B.engine.pendingCount(), 0);
+});
+
+test("moving into a folder that was deleted elsewhere falls back to the root", async () => {
+  const server = new FakeServer();
+  const A = mk(server, "A");
+  const B = mk(server, "B");
+  await A.engine.init(); await B.engine.init();
+  await A.engine.bootstrap();
+  const f = await A.engine.createFolder("F");
+  A.engine.create("KH", "x");
+  await A.engine.settle();
+  await B.engine.bootstrap();
+
+  B.api.offline = true;
+  B.engine.move(firstKey(B.engine), f.id);
+  await B.engine.settle();
+  await A.engine.deleteFolder(f.id);
+  B.api.offline = false;
+  await B.engine.catchUp(); await B.engine.settle();
+  assert.equal(server.notes.get(1)!.folder_id, null);
+  assert.equal(B.engine.notes.get(firstKey(B.engine))!.folder_id, null);
+  assert.equal(B.engine.pendingCount(), 0);
+});
+
+test("folders survive a restart for offline display; old records without folder_id load as root", async () => {
+  const server = new FakeServer();
+  const store = new MemStore();
+  const one = mk(server, "A", store);
+  await one.engine.init();
+  await one.engine.bootstrap();
+  await one.engine.createFolder("F");
+  one.engine.create("KH", "x");
+  await one.engine.settle();
+  const raw = store.notes.get(firstKey(one.engine))! as Partial<LocalNote>;
+  delete raw.folder_id;
+  delete raw.base_folder_id;
+  const two = new SyncEngine(one.api, store, { debounceMs: 0, retry: false, deviceId: "A2" });
+  await two.init();
+  assert.deepEqual(two.getFolders().map((f) => f.name), ["F"]);
+  const n = two.notes.get(firstKey(two))!;
+  assert.deepEqual([n.folder_id, n.base_folder_id], [null, null]);
 });
