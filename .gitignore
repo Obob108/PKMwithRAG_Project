@@ -2,14 +2,19 @@
 __pycache__/
 *.pyc
 .venv/
-.pytest_cache/
+venv/
 
-# Secrets & data
-.env
-backend/.env
-data/*
-!data/.gitkeep
-
-# Node
+# Node / React
 node_modules/
 dist/
+build/
+
+# Bí mật
+.env
+.env.*
+*.pem
+
+# Khác
+.DS_Store
+.vscode/
+.idea/
