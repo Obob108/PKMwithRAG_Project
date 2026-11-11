@@ -54,7 +54,12 @@ test("login and register build a session via /api/me", async () => {
   assert.equal(calls[0].init.body, "username=alice&password=pw");
   const r = await register("", "bob", "matkhau-dai", "ma");
   assert.equal(r.token, "T");
-  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { username: "bob", password: "matkhau-dai", invite_code: "ma" });
+  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { username: "bob", password: "matkhau-dai", invite_code: "ma", captcha_token: null });
+  const c2 = stub((url) => url.endsWith("/api/me") ? json({ id: 9, username: "alice" }) : json({ access_token: "T", token_type: "bearer" }));
+  await login("", "alice", "pw", "cap-tok");
+  assert.equal(c2[0].init.body, "username=alice&password=pw&captcha_token=cap-tok");
+  await register("", "bob", "matkhau-dai", "", "cap-tok");
+  assert.equal(JSON.parse(String(c2[2].init.body)).captcha_token, "cap-tok");
   stub(() => json({ detail: "Sai tên đăng nhập hoặc mật khẩu" }, 401));
   await assert.rejects(() => login("", "a", "b"), (e: unknown) => e instanceof ApiError && e.detail.includes("Sai"));
 });

@@ -1,22 +1,40 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import HCaptcha from "./HCaptcha.tsx";
+import type { HCaptchaHandle } from "./HCaptcha.tsx";
 import { getConfig, login, register } from "../lib/api.ts";
 import type { PublicConfig, Session } from "../lib/api.ts";
 import { ApiError, NetworkError } from "../lib/types.ts";
+import FishBackground from "./FishBackground.tsx";
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+      {off && <line x1="3" y1="3" x2="21" y2="21" />}
+    </svg>
+  );
+}
 
 export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [cfg, setCfg] = useState<PublicConfig>({ allow_registration: true, invite_required: false });
+  const [cfg, setCfg] = useState<PublicConfig>({ allow_registration: true, invite_required: false, hcaptcha_sitekey: null });
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [invite, setInvite] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const captchaRef = useRef<HCaptchaHandle>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     getConfig().then(setCfg).catch(() => undefined);
   }, []);
+
+  const captchaOn = !!cfg.hcaptcha_sitekey;
+  const canSubmit = !busy && (!captchaOn || !!captchaToken);
 
   const switchMode = (m: "login" | "register") => {
     setMode(m);
@@ -31,14 +49,19 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
       if (password.length < 8) return setError("Mật khẩu cần ít nhất 8 ký tự");
       if (password !== confirm) return setError("Hai mật khẩu không khớp");
     }
+    if (captchaOn && !captchaToken) return setError("Vui lòng hoàn thành captcha");
     setBusy(true);
     try {
-      const s = mode === "login" ? await login("", username.trim(), password) : await register("", username.trim(), password, invite.trim());
+      const token = captchaToken ?? undefined;
+      const s = mode === "login"
+        ? await login("", username.trim(), password, token)
+        : await register("", username.trim(), password, invite.trim(), token);
       onLogin(s);
     } catch (err) {
       if (err instanceof ApiError) setError(err.detail || "Có lỗi xảy ra");
       else if (err instanceof NetworkError) setError("Không kết nối được máy chủ. Kiểm tra mạng hoặc backend đang chạy.");
       else setError("Có lỗi không xác định");
+      captchaRef.current?.reset(); // token captcha chỉ dùng được một lần: bắt giải lại
     } finally {
       setBusy(false);
     }
@@ -46,9 +69,10 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
 
   return (
     <div className="auth-wrap">
+      <FishBackground />
       <form className="auth-card" onSubmit={submit}>
-        <h1>🧠 Tri thức cá nhân</h1>
-        <p className="muted">Ghi chú Markdown, tự liên kết ngữ nghĩa, hỏi đáp trên chính ghi chú của bạn.</p>
+        <h1>Read. Feel. Write.</h1>
+        <p className="muted">Mừng bạn về nhà</p>
         {cfg.allow_registration && (
           <div className="auth-tabs" role="tablist">
             <button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>Đăng nhập</button>
@@ -59,12 +83,20 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
           <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
         </label>
         <label>Mật khẩu
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} required />
+          <span className="pw-field">
+            <input type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
+                   autoComplete={mode === "login" ? "current-password" : "new-password"} required />
+            <button type="button" className="pw-toggle" onClick={() => setShowPw(!showPw)}
+                    aria-label={showPw ? "Ẩn mật khẩu" : "Hiện mật khẩu"} aria-pressed={showPw}
+                    title={showPw ? "Ẩn mật khẩu" : "Hiện mật khẩu"}>
+              <EyeIcon off={showPw} />
+            </button>
+          </span>
         </label>
         {mode === "register" && (
           <>
             <label>Nhập lại mật khẩu
-              <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />
+              <input type={showPw ? "text" : "password"} value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />
             </label>
             {cfg.invite_required && (
               <label>Mã mời
@@ -73,8 +105,15 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
             )}
           </>
         )}
+        {captchaOn && (
+          <HCaptcha ref={captchaRef} sitekey={cfg.hcaptcha_sitekey as string}
+                    onVerify={(t) => { setCaptchaToken(t); setError(null); }}
+                    onExpire={() => setCaptchaToken(null)}
+                    onError={setError} />
+        )}
         {error && <div className="form-error" role="alert">{error}</div>}
-        <button className="primary" type="submit" disabled={busy}>
+        <button className="primary" type="submit" disabled={!canSubmit}
+                title={captchaOn && !captchaToken ? "Hoàn thành captcha trước" : undefined}>
           {busy ? "Đang xử lý…" : mode === "login" ? "Đăng nhập" : "Tạo tài khoản"}
         </button>
         {!cfg.allow_registration && <p className="muted small">Máy chủ đang tắt đăng ký. Hãy nhờ quản trị viên tạo tài khoản.</p>}

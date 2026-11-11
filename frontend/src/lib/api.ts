@@ -11,6 +11,8 @@ export interface Session {
 export interface PublicConfig {
   allow_registration: boolean;
   invite_required: boolean;
+  /** Khác null = máy chủ bắt buộc giải hCaptcha khi đăng nhập/đăng ký. */
+  hcaptcha_sitekey?: string | null;
 }
 export interface RelatedItem {
   note_id: number;
@@ -84,22 +86,25 @@ async function sessionFromToken(base: string, token: string): Promise<Session> {
   return { token, username: me.username, userId: me.id };
 }
 
-export async function login(base: string, username: string, password: string): Promise<Session> {
+export async function login(base: string, username: string, password: string, captchaToken?: string): Promise<Session> {
+  const form = new URLSearchParams({ username, password });
+  if (captchaToken) form.set("captcha_token", captchaToken);
   const res = await doFetch(`${base}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ username, password }).toString(),
+    body: form.toString(),
   });
   if (!res.ok) throw await readError(res);
   const { access_token } = (await res.json()) as { access_token: string };
   return sessionFromToken(base, access_token);
 }
 
-export async function register(base: string, username: string, password: string, inviteCode?: string): Promise<Session> {
+export async function register(base: string, username: string, password: string, inviteCode?: string,
+                               captchaToken?: string): Promise<Session> {
   const res = await doFetch(`${base}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, invite_code: inviteCode || null }),
+    body: JSON.stringify({ username, password, invite_code: inviteCode || null, captcha_token: captchaToken || null }),
   });
   if (!res.ok) throw await readError(res);
   const { access_token } = (await res.json()) as { access_token: string };

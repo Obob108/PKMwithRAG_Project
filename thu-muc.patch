@@ -1,0 +1,1757 @@
+diff --git a/SPEC.md b/SPEC.md
+index 58455a5..cba1766 100644
+--- a/SPEC.md
++++ b/SPEC.md
+@@ -53,6 +53,12 @@ Ghi chú: GET /notes[?full=true] | POST /notes | POST /notes/upload (.md/.txt/.p
+   PDF upload: lưu file gốc tại uploads/<user_id>/<uuid>.pdf (đường dẫn tương đối trong DB, chống path traversal),
+   GET /notes/{id}/file trả PDF (chỉ chủ sở hữu); xóa ghi chú xóa luôn file. Ghi chú có has_file, file_name.
+   PUT nhận {content, base_version, title?} → {result: ok|merged|conflict, note}
++Thư mục (một cấp): GET /folders | POST /folders {name} | PATCH /folders/{id} {name} | DELETE /folders/{id} → {moved}
++  Tên không trùng trong cùng user (không phân biệt hoa/thường). Xóa thư mục KHÔNG xóa ghi chú: ghi chú bên trong
++  chuyển ra ngoài (folder_id = NULL, tăng version, sự kiện 'updated' với device_id NULL để mọi thiết bị tải lại).
++  POST /notes và POST /notes/upload (form) nhận folder_id; PUT /notes/{id} nhận folder_id CHỈ khi đổi thư mục
++  (null = ra ngoài; thiết bị gửi sau thắng). Chỉ đổi thư mục thì không lập chỉ mục lại, không đổi updated_at.
++  Thư mục không tồn tại/của user khác → ghi chú nằm ngoài. Sự kiện loại 'folder' báo danh sách thư mục đổi.
+ Liên kết: GET /notes/{id}/related | GET /graph?min_score= (nút: id, title, source, has_file, degree)
+ Hỏi đáp: GET /search?q= | POST /chat {question, use_graph?} (mặc định vector thuần)
+ Đồng bộ: GET /sync/changes[?since=] | GET /events (SSE)
+@@ -63,7 +69,7 @@ Mọi truy vấn lọc theo user_id lấy từ token; file PDF upload lưu theo
+ Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện thoại:
+ - Đăng nhập / Đăng ký (có mã mời nếu máy chủ bật).
+ - Ribbon (thanh công cụ dọc): bật/tắt sidebar, ghi chú mới, mở nhanh, Graph, tải lên, hỏi đáp, bảng lệnh, đồng bộ, cài đặt.
+-- Sidebar trái: Tệp (sắp xếp, lọc theo thẻ), Tìm kiếm (từ khóa trên máy + tìm ngữ nghĩa qua API), Thẻ.
++- Sidebar trái: Tệp (cây thư mục một cấp: tạo/đổi tên/xóa, kéo thả ghi chú vào/ra thư mục, kéo file từ máy thả vào thư mục để tải lên; sắp xếp, lọc theo thẻ), Tìm kiếm (từ khóa trên máy + tìm ngữ nghĩa qua API), Thẻ.
+ - Sidebar phải: Liên kết (backlink, liên kết đi, [[chưa tạo]], ghi chú liên quan tự động kèm điểm), Dàn ý, Hỏi đáp (nguồn bấm được).
+ - Tab: ghi chú, PDF gốc, Graph view. Editor: soạn / xem / chia đôi, thanh định dạng, tự hoàn thành [[, #thẻ, callout, bảng,
+   việc cần làm; đổi tên ghi chú tự cập nhật [[liên kết]] ở ghi chú khác. Thanh trạng thái: đồng bộ trực tiếp/ngoại tuyến, số thay đổi chờ,
+@@ -125,6 +131,7 @@ Máy chủ là nguồn sự thật. Mỗi ghi chú có `version` tăng dần; m
+ - [ ] Chạy run_eval --part all --compare để có số liệu cuối trên 39 câu; chạy sample_links để chọn τ; chấm tay chất lượng câu trả lời
+ - [x] Auth + API + đồng bộ + đăng ký + lưu PDF gốc. Schema v3 (file_path, file_name), migration idempotent từ v1/v2. Sandbox: 85 test backend pass, 1 skip (API test cần fastapi, chạy trên máy bạn).
+ - [x] Frontend (gói 10): thư viện thuần TS có 60 test pass (merge, engine offline/đồng bộ, api, text, markdown, graphModel); toàn bộ component biên dịch bằng esbuild và render thử bằng react-dom/server. CHƯA chạy trong trình duyệt thật: cần `npm install && npm run dev` và xem bằng mắt.
++- [x] Thư mục (schema v4: bảng folders, notes.folder_id, events thêm loại 'folder'; migration giữ nguyên id sự kiện). Chọn thư mục khi tải lên, ô chọn thư mục trong editor (dùng trên điện thoại vì không kéo thả được). Đổi thư mục dùng được ngoại tuyến (đồng bộ như sửa nội dung); tạo/đổi tên/xóa thư mục cần mạng.
+ - [ ] Việc còn lại: kiểm thử tay trên trình duyệt + điện thoại, chọn τ (sample_links), chấm tay chất lượng câu trả lời, thêm ghi chú đa chủ đề, deploy VPS (để sau).
+ 
+ Ghi chú thiết kế:
+diff --git a/backend/app/api/routes.py b/backend/app/api/routes.py
+index c819379..7d386d0 100644
+--- a/backend/app/api/routes.py
++++ b/backend/app/api/routes.py
+@@ -7,7 +7,7 @@ import time
+ import uuid
+ from pathlib import Path
+ 
+-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request,
++from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Query, Request,
+                      Response, UploadFile)
+ from fastapi.responses import FileResponse, StreamingResponse
+ from fastapi.security import OAuth2PasswordRequestForm
+@@ -33,12 +33,19 @@ class NoteCreate(BaseModel):
+     title: str = Field(min_length=1, max_length=200)
+     content: str = Field(default="", max_length=500_000)
+     client_id: str | None = Field(default=None, max_length=64)
++    folder_id: int | None = None
+ 
+ 
+ class NoteUpdate(BaseModel):
+     content: str = Field(max_length=500_000)
+     base_version: int = Field(ge=1)
+     title: str | None = Field(default=None, max_length=200)
++    # Chi gui khi doi thu muc; gui null = dua ghi chu ra ngoai. Khong gui = giu nguyen.
++    folder_id: int | None = None
++
++
++class FolderIn(BaseModel):
++    name: str = Field(min_length=1, max_length=100)
+ 
+ 
+ class RegisterRequest(BaseModel):
+@@ -146,13 +153,14 @@ def create_note(body: NoteCreate, request: Request, background: BackgroundTasks,
+                 user: dict = Depends(current_user), conn=Depends(get_conn),
+                 x_device_id: str | None = Header(default=None)):
+     note = notes_svc.create_note(conn, user["id"], body.title, body.content,
+-                                 client_id=body.client_id, device_id=x_device_id)
++                                 client_id=body.client_id, device_id=x_device_id, folder_id=body.folder_id)
+     background.add_task(run_index, request.app, user["id"], note["id"])
+     return note
+ 
+ 
+ @router.post("/notes/upload", status_code=201)
+ def upload_note(request: Request, background: BackgroundTasks, file: UploadFile = File(...),
++                folder_id: int | None = Form(default=None),
+                 user: dict = Depends(current_user), conn=Depends(get_conn),
+                 x_device_id: str | None = Header(default=None)):
+     s = request.app.state.settings
+@@ -188,7 +196,7 @@ def upload_note(request: Request, background: BackgroundTasks, file: UploadFile
+         content, source = data.decode("utf-8", errors="replace"), "md"
+     try:
+         note = notes_svc.create_note(conn, user["id"], title, content, source=source, device_id=x_device_id,
+-                                     file_path=file_path, file_name=file_name)
++                                     file_path=file_path, file_name=file_name, folder_id=folder_id)
+     except Exception:
+         if file_path:
+             (s.upload_dir / file_path).unlink(missing_ok=True)
+@@ -222,16 +230,18 @@ def get_note(note_id: int, user: dict = Depends(current_user), conn=Depends(get_
+ def update_note(note_id: int, body: NoteUpdate, request: Request, background: BackgroundTasks,
+                 user: dict = Depends(current_user), conn=Depends(get_conn),
+                 x_device_id: str | None = Header(default=None)):
++    extra = {"folder_id": body.folder_id} if "folder_id" in body.model_fields_set else {}
+     try:
+         out = notes_svc.update_note(conn, user["id"], note_id, content=body.content,
+-                                    base_version=body.base_version, title=body.title, device_id=x_device_id)
++                                    base_version=body.base_version, title=body.title, device_id=x_device_id,
++                                    **extra)
+     except notes_svc.NotFound:
+         raise _not_found()
+     except notes_svc.BadVersion:
+         raise HTTPException(status_code=409, detail="base_version không hợp lệ (lớn hơn phiên bản hiện tại)")
+     except notes_svc.TitleTaken:
+         raise HTTPException(status_code=409, detail="Đã có ghi chú khác dùng tiêu đề này")
+-    if out["changed"]:
++    if out["reindex"]:  # chi doi thu muc thi khong can embed lai
+         background.add_task(run_index, request.app, user["id"], note_id)
+     return {"result": out["result"], "note": out["note"]}
+ 
+@@ -264,6 +274,43 @@ def graph(min_score: float = Query(0.0, ge=0.0, le=1.0), user: dict = Depends(cu
+     return notes_svc.graph(conn, user["id"], min_score)
+ 
+ 
++# ------------------------------------------------------------------ thu muc
++def _folder_errors(fn):
++    try:
++        return fn()
++    except notes_svc.NotFound:
++        raise HTTPException(status_code=404, detail="Không tìm thấy thư mục")
++    except notes_svc.FolderTaken:
++        raise HTTPException(status_code=409, detail="Đã có thư mục cùng tên")
++    except ValueError as exc:
++        raise HTTPException(status_code=422, detail=str(exc))
++
++
++@router.get("/folders")
++def list_folders(user: dict = Depends(current_user), conn=Depends(get_conn)):
++    return notes_svc.list_folders(conn, user["id"])
++
++
++@router.post("/folders", status_code=201)
++def create_folder(body: FolderIn, user: dict = Depends(current_user), conn=Depends(get_conn),
++                  x_device_id: str | None = Header(default=None)):
++    return _folder_errors(lambda: notes_svc.create_folder(conn, user["id"], body.name, x_device_id))
++
++
++@router.patch("/folders/{folder_id}")
++def rename_folder(folder_id: int, body: FolderIn, user: dict = Depends(current_user), conn=Depends(get_conn),
++                  x_device_id: str | None = Header(default=None)):
++    return _folder_errors(lambda: notes_svc.rename_folder(conn, user["id"], folder_id, body.name, x_device_id))
++
++
++@router.delete("/folders/{folder_id}")
++def delete_folder(folder_id: int, user: dict = Depends(current_user), conn=Depends(get_conn),
++                  x_device_id: str | None = Header(default=None)):
++    """Xoa thu muc; ghi chu ben trong chuyen ra ngoai, khong bi xoa."""
++    moved = _folder_errors(lambda: notes_svc.delete_folder(conn, user["id"], folder_id, x_device_id))
++    return {"moved": moved}
++
++
+ # ------------------------------------------------------------------ search / chat
+ @router.get("/search")
+ def search(request: Request, q: str = Query(..., min_length=1, max_length=500), limit: int = Query(5, ge=1, le=20),
+diff --git a/backend/app/core/db.py b/backend/app/core/db.py
+index f8a694b..2fe9c83 100644
+--- a/backend/app/core/db.py
++++ b/backend/app/core/db.py
+@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(user_id, session_id)
+ """
+ 
+ 
+-SCHEMA_VERSION = 3
++SCHEMA_VERSION = 4
+ 
+ # v2: phien ban ghi chu (de gop ba chieu) + nhat ky su kien (de dong bo truc tiep).
+ MIGRATION_V2 = """
+@@ -95,6 +95,38 @@ CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, id);
+ """
+ 
+ 
++# v4: thu muc (mot cap) chua ghi chu. Xoa thu muc -> ghi chu ra ngoai (folder_id = NULL), khong mat.
++MIGRATION_V4_FOLDERS = """
++CREATE TABLE IF NOT EXISTS folders (
++    id         INTEGER PRIMARY KEY AUTOINCREMENT,
++    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
++    name       TEXT NOT NULL,
++    created_at TEXT NOT NULL DEFAULT (datetime('now')),
++    UNIQUE (user_id, name)
++);
++CREATE INDEX IF NOT EXISTS idx_folders_user ON folders(user_id);
++"""
++
++# Bang events duoc dung lai de them loai su kien 'folder' (SQLite khong sua duoc CHECK tai cho).
++# Voi su kien 'folder', note_id la id thu muc va version = 0.
++MIGRATION_V4_EVENTS = """
++CREATE TABLE events_v4 (
++    id         INTEGER PRIMARY KEY AUTOINCREMENT,
++    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
++    type       TEXT NOT NULL CHECK (type IN ('created', 'updated', 'deleted', 'folder')),
++    note_id    INTEGER NOT NULL,
++    version    INTEGER NOT NULL,
++    device_id  TEXT,
++    created_at TEXT NOT NULL DEFAULT (datetime('now'))
++);
++INSERT INTO events_v4(id, user_id, type, note_id, version, device_id, created_at)
++    SELECT id, user_id, type, note_id, version, device_id, created_at FROM events;
++DROP TABLE events;
++ALTER TABLE events_v4 RENAME TO events;
++CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, id);
++"""
++
++
+ def connect(path: str | Path) -> sqlite3.Connection:
+     if str(path) != ":memory:":
+         Path(path).parent.mkdir(parents=True, exist_ok=True)
+@@ -134,6 +166,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
+         "INSERT INTO note_versions(note_id, version, title, content) "
+         "SELECT id, version, title, content FROM notes WHERE id NOT IN (SELECT note_id FROM note_versions)"
+     )
++    # v4: thu muc
++    conn.executescript(MIGRATION_V4_FOLDERS)
++    if "folder_id" not in _columns(conn, "notes"):
++        conn.execute("ALTER TABLE notes ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL")
++    conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_folder ON notes(folder_id)")
++    events_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'").fetchone()[0]
++    if "'folder'" not in events_sql:
++        conn.commit()
++        conn.executescript(MIGRATION_V4_EVENTS)
+     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+     conn.commit()
+ 
+diff --git a/backend/app/services/notes.py b/backend/app/services/notes.py
+index 33f0ec2..f14c131 100644
+--- a/backend/app/services/notes.py
++++ b/backend/app/services/notes.py
+@@ -24,12 +24,20 @@ class BadVersion(Exception):
+     pass
+ 
+ 
++class FolderTaken(Exception):
++    pass
++
++
++_UNSET = object()  # phan biet "khong gui folder_id" voi "gui null" (= dua ra ngoai)
++
++
+ def _public(row, with_content: bool = True) -> dict:
+     d = {
+         "id": row["id"], "title": row["title"], "source": row["source"], "status": row["status"],
+         "version": row["version"], "has_conflict": bool(row["has_conflict"]), "error": row["error"],
+         "created_at": row["created_at"], "updated_at": row["updated_at"],
+         "has_file": bool(row["file_path"]), "file_name": row["file_name"],
++        "folder_id": row["folder_id"],
+     }
+     if with_content:
+         d["content"] = row["content"]
+@@ -64,9 +72,18 @@ def unique_title(conn, user_id: int, title: str) -> str:
+     return candidate
+ 
+ 
++def _valid_folder(conn, user_id: int, folder_id) -> int | None:
++    """Thu muc cua chinh user thi giu, khong ton tai (vd da bi xoa tren thiet bi khac) thi dua ra ngoai."""
++    if folder_id is None:
++        return None
++    row = conn.execute("SELECT id FROM folders WHERE id = ? AND user_id = ?", (folder_id, user_id)).fetchone()
++    return row["id"] if row else None
++
++
+ def create_note(conn, user_id: int, title: str, content: str = "", *, source: str = "md",
+                 client_id: str | None = None, device_id: str | None = None,
+-                file_path: str | None = None, file_name: str | None = None) -> dict:
++                file_path: str | None = None, file_name: str | None = None,
++                folder_id: int | None = None) -> dict:
+     """Tao ghi chu. client_id (uuid do thiet bi sinh) giup gui lai khi mat mang khong tao trung."""
+     if client_id:
+         row = conn.execute(
+@@ -75,10 +92,10 @@ def create_note(conn, user_id: int, title: str, content: str = "", *, source: st
+             return _public(row)
+     title = unique_title(conn, user_id, title)
+     cur = conn.execute(
+-        "INSERT INTO notes(user_id, title, content, source, client_id, has_conflict, file_path, file_name) "
+-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
++        "INSERT INTO notes(user_id, title, content, source, client_id, has_conflict, file_path, file_name, "
++        "folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         (user_id, title, content, source, client_id, int(merge.has_conflict_markers(content)),
+-         file_path, file_name),
++         file_path, file_name, _valid_folder(conn, user_id, folder_id)),
+     )
+     _record(conn, user_id, cur.lastrowid, 1, title, content, "created", device_id)
+     conn.commit()
+@@ -96,8 +113,12 @@ def list_notes(conn, user_id: int, with_content: bool = False) -> list[dict]:
+ 
+ 
+ def update_note(conn, user_id: int, note_id: int, *, content: str, base_version: int,
+-                title: str | None = None, device_id: str | None = None) -> dict:
+-    """Tra ve {"result": "ok"|"merged"|"conflict", "changed": bool, "note": {...}}."""
++                title: str | None = None, device_id: str | None = None, folder_id=_UNSET) -> dict:
++    """Tra ve {"result": "ok"|"merged"|"conflict", "changed": bool, "reindex": bool, "note": {...}}.
++
++    folder_id: chi gui khi thiet bi doi thu muc (None = dua ra ngoai); thiet bi gui sau thang.
++    Chi doi thu muc thi van tang version (de thiet bi khac biet) nhung KHONG lap chi muc lai.
++    """
+     row = _get_row(conn, user_id, note_id)
+     current = row["version"]
+     if base_version < 1 or base_version > current:
+@@ -131,18 +152,23 @@ def update_note(conn, user_id: int, note_id: int, *, content: str, base_version:
+     ).fetchone():
+         raise TitleTaken(new_title)
+ 
+-    if new_content == row["content"] and new_title == row["title"]:
+-        return {"result": result, "changed": False, "note": _public(row)}
++    new_folder = row["folder_id"] if folder_id is _UNSET else _valid_folder(conn, user_id, folder_id)
++    reindex = new_content != row["content"] or new_title != row["title"]
++    if not reindex and new_folder == row["folder_id"]:
++        return {"result": result, "changed": False, "reindex": False, "note": _public(row)}
+ 
+     version = current + 1
+     conn.execute(
+-        "UPDATE notes SET title = ?, content = ?, version = ?, status = 'pending', has_conflict = ?, "
+-        "error = NULL, updated_at = datetime('now') WHERE id = ?",
+-        (new_title, new_content, version, int(merge.has_conflict_markers(new_content)), note_id),
++        "UPDATE notes SET title = ?, content = ?, version = ?, folder_id = ?, has_conflict = ?, "
++        "status = CASE WHEN ? THEN 'pending' ELSE status END, error = CASE WHEN ? THEN NULL ELSE error END, "
++        "updated_at = CASE WHEN ? THEN datetime('now') ELSE updated_at END WHERE id = ?",
++        (new_title, new_content, version, new_folder, int(merge.has_conflict_markers(new_content)),
++         int(reindex), int(reindex), int(reindex), note_id),
+     )
+     _record(conn, user_id, note_id, version, new_title, new_content, "updated", device_id)
+     conn.commit()
+-    return {"result": result, "changed": True, "note": _public(_get_row(conn, user_id, note_id))}
++    return {"result": result, "changed": True, "reindex": reindex,
++            "note": _public(_get_row(conn, user_id, note_id))}
+ 
+ 
+ def delete_note(conn, user_id: int, note_id: int, device_id: str | None = None,
+@@ -175,6 +201,75 @@ def get_file(conn, user_id: int, note_id: int, upload_dir: Path) -> tuple[Path,
+     return path, row["file_name"] or f"{row['title']}.pdf"
+ 
+ 
++# ---------------------------------------------------------------- thu muc
++def _folder_public(row) -> dict:
++    return {"id": row["id"], "name": row["name"], "created_at": row["created_at"]}
++
++
++def _folder_row(conn, user_id: int, folder_id: int):
++    row = conn.execute("SELECT * FROM folders WHERE id = ? AND user_id = ?", (folder_id, user_id)).fetchone()
++    if row is None:
++        raise NotFound(folder_id)
++    return row
++
++
++def _check_folder_name(conn, user_id: int, name: str, exclude_id: int | None = None) -> str:
++    name = " ".join((name or "").split())[:100]
++    if not name:
++        raise ValueError("Tên thư mục không được rỗng")
++    for r in conn.execute("SELECT id, name FROM folders WHERE user_id = ?", (user_id,)):
++        if r["id"] != exclude_id and r["name"].casefold() == name.casefold():
++            raise FolderTaken(name)
++    return name
++
++
++def _folder_event(conn, user_id: int, folder_id: int, device_id: str | None) -> None:
++    conn.execute("INSERT INTO events(user_id, type, note_id, version, device_id) VALUES (?, 'folder', ?, 0, ?)",
++                 (user_id, folder_id, device_id))
++
++
++def list_folders(conn, user_id: int) -> list[dict]:
++    rows = conn.execute("SELECT * FROM folders WHERE user_id = ? ORDER BY name COLLATE NOCASE, id", (user_id,))
++    return [_folder_public(r) for r in rows]
++
++
++def create_folder(conn, user_id: int, name: str, device_id: str | None = None) -> dict:
++    name = _check_folder_name(conn, user_id, name)
++    cur = conn.execute("INSERT INTO folders(user_id, name) VALUES (?, ?)", (user_id, name))
++    _folder_event(conn, user_id, cur.lastrowid, device_id)
++    conn.commit()
++    return _folder_public(_folder_row(conn, user_id, cur.lastrowid))
++
++
++def rename_folder(conn, user_id: int, folder_id: int, name: str, device_id: str | None = None) -> dict:
++    row = _folder_row(conn, user_id, folder_id)
++    name = _check_folder_name(conn, user_id, name, exclude_id=folder_id)
++    if name != row["name"]:
++        conn.execute("UPDATE folders SET name = ? WHERE id = ?", (name, folder_id))
++        _folder_event(conn, user_id, folder_id, device_id)
++        conn.commit()
++    return _folder_public(_folder_row(conn, user_id, folder_id))
++
++
++def delete_folder(conn, user_id: int, folder_id: int, device_id: str | None = None) -> int:
++    """Xoa thu muc; cac ghi chu ben trong ra ngoai (khong bi xoa). Tra ve so ghi chu da chuyen.
++
++    Moi ghi chu chuyen ra tang version + ghi su kien 'updated' voi device_id NULL, de MOI thiet bi
++    (ke ca thiet bi vua xoa) tai lai ban moi.
++    """
++    _folder_row(conn, user_id, folder_id)
++    moved = conn.execute("SELECT * FROM notes WHERE user_id = ? AND folder_id = ?", (user_id, folder_id)).fetchall()
++    for r in moved:
++        version = r["version"] + 1
++        conn.execute("UPDATE notes SET folder_id = NULL, version = ? WHERE id = ?",
++                     (version, r["id"]))
++        _record(conn, user_id, r["id"], version, r["title"], r["content"], "updated", None)
++    conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
++    _folder_event(conn, user_id, folder_id, device_id)
++    conn.commit()
++    return len(moved)
++
++
+ # ---------------------------------------------------------------- su kien / dong bo
+ def _event(r) -> dict:
+     return {"id": r["id"], "type": r["type"], "note_id": r["note_id"], "version": r["version"],
+@@ -242,7 +337,8 @@ def graph(conn, user_id: int, min_score: float = 0.0) -> dict:
+         degree[a] = degree.get(a, 0) + 1
+         degree[b] = degree.get(b, 0) + 1
+     nodes = [{"id": r["id"], "title": r["title"], "source": r["source"], "has_file": bool(r["file_path"]),
+-              "degree": degree.get(r["id"], 0)}
++              "folder_id": r["folder_id"], "degree": degree.get(r["id"], 0)}
+              for r in conn.execute(
+-                 "SELECT id, title, source, file_path FROM notes WHERE user_id = ? ORDER BY id", (user_id,))]
++                 "SELECT id, title, source, file_path, folder_id FROM notes WHERE user_id = ? ORDER BY id",
++                 (user_id,))]
+     return {"nodes": nodes, "edges": list(pairs.values())}
+diff --git a/backend/tests/test_api.py b/backend/tests/test_api.py
+index 97a2c74..b6e63e8 100644
+--- a/backend/tests/test_api.py
++++ b/backend/tests/test_api.py
+@@ -234,3 +234,38 @@ def test_list_full_and_pdf_original_is_stored_and_owner_only(client):
+     assert nodes["Bai bao"]["has_file"] is True and nodes["Thuong"]["has_file"] is False
+     assert client.delete(f"/api/notes/{n['id']}", headers=ha).status_code == 204
+     assert client.get(f"/api/notes/{n['id']}/file", headers=ha).status_code == 404
++
++
++# ---------------------------------------------------------------- thu muc
++def test_folders_over_http(client):
++    h, hb = login(client), login(client, "bob")
++    r = client.post("/api/folders", json={"name": "Đồ án"}, headers=h)
++    assert r.status_code == 201
++    fid = r.json()["id"]
++    assert client.post("/api/folders", json={"name": "đồ án"}, headers=h).status_code == 409
++    assert client.post("/api/folders", json={"name": ""}, headers=h).status_code == 422
++    assert [f["name"] for f in client.get("/api/folders", headers=h).json()] == ["Đồ án"]
++    assert client.get("/api/folders", headers=hb).json() == []
++    assert client.patch(f"/api/folders/{fid}", json={"name": "x"}, headers=hb).status_code == 404
++
++    n = make_note(client, h, "Trong", A, folder_id=fid)
++    assert n["folder_id"] == fid
++    up = client.post("/api/notes/upload", headers=h, data={"folder_id": str(fid)},
++                     files={"file": ("Tep.md", b"# T\nnoi dung", "text/markdown")})
++    assert up.status_code == 201 and up.json()["folder_id"] == fid
++
++    # chuyen ra ngoai (folder_id null) va vao lai; khong gui folder_id thi giu nguyen
++    r = client.put(f"/api/notes/{n['id']}", headers=h, json={"content": A, "base_version": 1, "folder_id": None})
++    assert r.json()["note"]["folder_id"] is None and r.json()["note"]["status"] == "ready"
++    r = client.put(f"/api/notes/{n['id']}", headers=h, json={"content": A, "base_version": 2, "folder_id": fid})
++    assert r.json()["note"]["folder_id"] == fid
++    r = client.put(f"/api/notes/{n['id']}", headers=h, json={"content": A + " them", "base_version": 3})
++    assert r.json()["note"]["folder_id"] == fid
++
++    assert client.patch(f"/api/folders/{fid}", json={"name": "Đồ án tốt nghiệp"}, headers=h).json()["name"] == "Đồ án tốt nghiệp"
++    d = client.delete(f"/api/folders/{fid}", headers=h)
++    assert d.status_code == 200 and d.json() == {"moved": 2}
++    assert all(x["folder_id"] is None for x in client.get("/api/notes", headers=h).json())
++    assert len(client.get("/api/notes", headers=h).json()) == 2
++    feed = client.get("/api/sync/changes", params={"since": 0}, headers=h).json()["events"]
++    assert feed[-1]["type"] == "folder"
+diff --git a/backend/tests/test_notes_service.py b/backend/tests/test_notes_service.py
+index 3a17a90..17c846f 100644
+--- a/backend/tests/test_notes_service.py
++++ b/backend/tests/test_notes_service.py
+@@ -1,6 +1,6 @@
+ import sqlite3
+ 
+-from app.core.db import SCHEMA, connect, init_db
++from app.core.db import SCHEMA, SCHEMA_VERSION, connect, init_db
+ from app.services import notes
+ from app.services.indexer import delete_note as delete_note_index
+ from app.services.indexer import index_note, upsert_note
+@@ -157,7 +157,7 @@ def test_migration_from_v1_schema_backfills_versions_and_is_idempotent():
+     init_db(conn)
+     cols = {r[1] for r in conn.execute("PRAGMA table_info(notes)")}
+     assert {"version", "has_conflict", "client_id"} <= cols
+-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
++    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+     rows = conn.execute("SELECT note_id, version, content FROM note_versions").fetchall()
+     assert [(r[0], r[1], r[2]) for r in rows] == [(1, 1, "noi dung cu")]
+     r = notes.update_note(conn, 1, 1, content="moi", base_version=1)  # ghi chu cu dung duoc binh thuong
+@@ -241,3 +241,111 @@ def test_note_without_file():
+     assert n["has_file"] is False and notes.get_file(conn, 1, n["id"], __import__("pathlib").Path(".")) is None
+     assert "content" not in notes.list_notes(conn, 1)[0]
+     assert notes.list_notes(conn, 1, with_content=True)[0]["content"] == "c"
++
++
++# ---------------------------------------------------------------- thu muc
++def _expect(exc, fn):
++    try:
++        fn()
++    except exc:
++        return
++    raise AssertionError(f"expected {exc.__name__}")
++
++
++def test_folder_crud_unique_names_and_isolation():
++    conn = _conn()
++    f = notes.create_folder(conn, 1, "  Do   an  ")
++    assert f["name"] == "Do an"
++    _expect(notes.FolderTaken, lambda: notes.create_folder(conn, 1, "do AN"))
++    _expect(ValueError, lambda: notes.create_folder(conn, 1, "   "))
++    assert notes.create_folder(conn, 2, "Do an")["name"] == "Do an"  # user khac duoc trung ten
++    g = notes.create_folder(conn, 1, "An uong")
++    assert [x["name"] for x in notes.list_folders(conn, 1)] == ["An uong", "Do an"]
++    assert notes.rename_folder(conn, 1, g["id"], "Bep")["name"] == "Bep"
++    _expect(notes.FolderTaken, lambda: notes.rename_folder(conn, 1, g["id"], "do an"))
++    for fn in (lambda: notes.rename_folder(conn, 2, f["id"], "x"), lambda: notes.delete_folder(conn, 2, f["id"])):
++        _expect(notes.NotFound, fn)
++
++
++def test_create_in_folder_and_foreign_or_missing_folder_falls_back_to_root():
++    conn = _conn()
++    f = notes.create_folder(conn, 1, "F")
++    other = notes.create_folder(conn, 2, "Cua B")
++    assert notes.create_note(conn, 1, "A", "x", folder_id=f["id"])["folder_id"] == f["id"]
++    assert notes.create_note(conn, 1, "B", "x", folder_id=other["id"])["folder_id"] is None
++    assert notes.create_note(conn, 1, "C", "x", folder_id=999)["folder_id"] is None
++    assert notes.create_note(conn, 1, "D", "x")["folder_id"] is None
++
++
++def test_move_bumps_version_but_keeps_index_status_and_order():
++    conn = _conn()
++    f = notes.create_folder(conn, 1, "F")
++    n = notes.create_note(conn, 1, "A", "x")
++    conn.execute("UPDATE notes SET status = 'ready', updated_at = '2000-01-01 00:00:00' WHERE id = ?", (n["id"],))
++    conn.commit()
++    r = notes.update_note(conn, 1, n["id"], content="x", base_version=1, folder_id=f["id"], device_id="web")
++    assert r["changed"] and not r["reindex"]
++    assert r["note"]["folder_id"] == f["id"] and r["note"]["version"] == 2
++    assert r["note"]["status"] == "ready" and r["note"]["updated_at"] == "2000-01-01 00:00:00"
++    assert notes.changes_since(conn, 1, 0)[-1]["type"] == "updated"
++    # khong gui folder_id = giu nguyen; gui None = ra ngoai
++    r = notes.update_note(conn, 1, n["id"], content="y", base_version=2)
++    assert r["reindex"] and r["note"]["folder_id"] == f["id"] and r["note"]["status"] == "pending"
++    r = notes.update_note(conn, 1, n["id"], content="y", base_version=3, folder_id=None)
++    assert r["note"]["folder_id"] is None
++
++
++def test_offline_move_merges_with_content_edit_from_other_device():
++    conn = _conn()
++    f = notes.create_folder(conn, 1, "F")
++    n = notes.create_note(conn, 1, "A", "a\nb\n")
++    notes.update_note(conn, 1, n["id"], content="a\nB\n", base_version=1, device_id="desktop")
++    r = notes.update_note(conn, 1, n["id"], content="a\nb\n", base_version=1, folder_id=f["id"], device_id="phone")
++    assert r["note"]["content"] == "a\nB\n" and r["note"]["folder_id"] == f["id"]
++
++
++def test_delete_folder_moves_notes_out_without_losing_them():
++    conn = _conn()
++    f = notes.create_folder(conn, 1, "F")
++    a = notes.create_note(conn, 1, "A", "noi dung a", folder_id=f["id"])
++    b = notes.create_note(conn, 1, "B", "noi dung b", folder_id=f["id"])
++    c = notes.create_note(conn, 1, "C", "c")
++    cursor = notes.latest_event_id(conn, 1)
++    assert notes.delete_folder(conn, 1, f["id"], device_id="web") == 2
++    assert notes.list_folders(conn, 1) == []
++    left = {x["title"]: x for x in notes.list_notes(conn, 1, with_content=True)}
++    assert set(left) == {"A", "B", "C"} and all(x["folder_id"] is None for x in left.values())
++    assert left["A"]["content"] == "noi dung a" and left["A"]["version"] == 2 and left["C"]["version"] == 1
++    ev = notes.changes_since(conn, 1, cursor)
++    assert sorted((e["type"], e["note_id"]) for e in ev if e["type"] == "updated") == [("updated", a["id"]), ("updated", b["id"])]
++    assert all(e["device_id"] is None for e in ev if e["type"] == "updated")  # moi thiet bi deu tai lai
++    assert ev[-1]["type"] == "folder" and ev[-1]["note_id"] == f["id"]
++    # thiet bi ngoai tuyen van o base 1, sua noi dung: gop binh thuong, khong keo lai thu muc da xoa
++    r = notes.update_note(conn, 1, a["id"], content="noi dung a sua", base_version=1, folder_id=f["id"])
++    assert r["note"]["content"] == "noi dung a sua" and r["note"]["folder_id"] is None
++    _expect(notes.NotFound, lambda: notes.delete_folder(conn, 1, f["id"]))
++    assert c["folder_id"] is None
++
++
++def test_migration_from_v3_rebuilds_events_and_keeps_ids():
++    from app.core import db as dbm
++    conn = connect(":memory:")
++    conn.executescript(SCHEMA)
++    for col in ("version INTEGER NOT NULL DEFAULT 1", "has_conflict INTEGER NOT NULL DEFAULT 0",
++                "client_id TEXT", "file_path TEXT", "file_name TEXT"):
++        conn.execute(f"ALTER TABLE notes ADD COLUMN {col}")
++    conn.executescript(dbm.MIGRATION_V2)
++    conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x')")
++    conn.execute("INSERT INTO notes(user_id, title, content) VALUES (1, 'Cu', 'c')")
++    conn.execute("INSERT INTO note_versions(note_id, version, title, content) VALUES (1, 1, 'Cu', 'c')")
++    for _ in range(3):
++        conn.execute("INSERT INTO events(user_id, type, note_id, version) VALUES (1, 'created', 1, 1)")
++    conn.execute("PRAGMA user_version = 3")
++    conn.commit()
++    init_db(conn)
++    init_db(conn)
++    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
++    assert [e["id"] for e in notes.changes_since(conn, 1, 0)] == [1, 2, 3]
++    f = notes.create_folder(conn, 1, "Moi")
++    assert notes.changes_since(conn, 1, 3)[0]["id"] == 4 and notes.get_note(conn, 1, 1)["folder_id"] is None
++    assert notes.update_note(conn, 1, 1, content="c", base_version=1, folder_id=f["id"])["note"]["folder_id"] == f["id"]
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index e3614b4..4204196 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -16,7 +16,7 @@ import { startLive } from "./lib/live.ts";
+ import type { LiveState } from "./lib/live.ts";
+ import { buildLinkIndex, extractOutline, extractTags, fold, fuzzyFilter, wordCount } from "./lib/text.ts";
+ import { ApiError, NetworkError } from "./lib/types.ts";
+-import type { LocalNote } from "./lib/types.ts";
++import type { Folder, LocalNote } from "./lib/types.ts";
+ import { applyTheme, loadUi, saveUi } from "./lib/ui.ts";
+ import type { LeftTab, RightTab, UiState } from "./lib/ui.ts";
+ import { uuid } from "./lib/uuid.ts";
+@@ -110,7 +110,7 @@ function Boot({ session, onLogout }: { session: Session; onLogout: () => void })
+ 
+ // ================================================================== không gian làm việc
+ type Tab = { id: string; kind: "note" | "pdf" | "graph"; key?: string };
+-type Dialog = null | "switcher" | "palette" | "settings";
++type Dialog = null | "switcher" | "palette" | "settings" | "upload";
+ 
+ function uniqueTitle(notes: LocalNote[], base: string): string {
+   const taken = new Set(notes.map((n) => fold(n.title)));
+@@ -124,6 +124,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+   const { engine, api } = live;
+   const online = live.state === "live";
+   const notes = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
++  const folders = useSyncExternalStore(engine.subscribe, engine.getFolders);
+   const [ui, setUiState] = useState<UiState>(loadUi);
+   const setUi = useCallback((patch: Partial<UiState>) => setUiState((u) => ({ ...u, ...patch })), []);
+   useEffect(() => {
+@@ -149,6 +150,8 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+   const [chatBusy, setChatBusy] = useState(false);
+   const chatId = useRef(1);
+   const fileInput = useRef<HTMLInputElement>(null);
++  const uploadFolder = useRef<number | null>(null); // thư mục đích của lần tải lên kế tiếp
++  const [uploadChoice, setUploadChoice] = useState<number | null>(null);
+ 
+   const byKey = useMemo(() => new Map(notes.map((n) => [n.key, n])), [notes]);
+   const linkIndex = useMemo(() => buildLinkIndex(notes), [notes]);
+@@ -180,6 +183,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+   // Theo dõi trạng thái lập chỉ mục của các ghi chú vừa lưu.
+   const notesRef = useRef(notes);
+   notesRef.current = notes;
++  const activeKeyRef = useRef<string | null>(null);
+   useEffect(() => {
+     if (!online) return;
+     const t = window.setInterval(() => {
+@@ -224,8 +228,8 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+     if (key) openPdf(key);
+   }, [engine, openPdf]);
+ 
+-  const newNote = useCallback((title?: string, content = "") => {
+-    const n = engine.create(uniqueTitle(notesRef.current, title?.trim() || "Chưa đặt tên"), content);
++  const newNote = useCallback((title?: string, content = "", folderId: number | null = null) => {
++    const n = engine.create(uniqueTitle(notesRef.current, title?.trim() || "Chưa đặt tên"), content, folderId);
+     openKey(n.key);
+     return n;
+   }, [engine, openKey]);
+@@ -263,7 +267,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+     let last: string | null = null;
+     for (const f of Array.from(files)) {
+       try {
+-        const r = await api.upload(f);
++        const r = await api.upload(f, uploadFolder.current);
+         last = await engine.adoptRemote(r.id);
+       } catch (e) {
+         flash(e instanceof ApiError ? `${f.name}: ${e.detail}` : e instanceof NetworkError ? "Cần kết nối mạng để tải lên" : `${f.name}: lỗi tải lên`);
+@@ -275,6 +279,62 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+     }
+   }, [api, engine, openKey, flash]);
+ 
++  /** folderId: undefined = hỏi người dùng chọn thư mục (nếu có thư mục), null/số = tải thẳng vào đó. */
++  const requestUpload = useCallback((folderId?: number | null) => {
++    if (folderId === undefined && engine.getFolders().length > 0) {
++      const active = notesRef.current.find((n) => n.key === activeKeyRef.current);
++      setUploadChoice(active?.folder_id ?? null);
++      setDialog("upload");
++      return;
++    }
++    uploadFolder.current = folderId ?? null;
++    fileInput.current?.click();
++  }, [engine]);
++
++  const dropFiles = useCallback((files: FileList, folderId: number | null) => {
++    uploadFolder.current = folderId;
++    void upload(Array.from(files));
++  }, [upload]);
++
++  // ---------------------------------------------------------------- thư mục
++  const folderError = (e: unknown): string =>
++    e instanceof ApiError ? e.detail : e instanceof NetworkError ? "Cần kết nối mạng để quản lý thư mục" : "Có lỗi xảy ra";
++  const createFolder = useCallback(async (name: string): Promise<string | null> => {
++    try {
++      const f = await engine.createFolder(name);
++      setUiState((u) => ({ ...u, collapsedFolders: u.collapsedFolders.filter((x) => x !== f.id) }));
++      return null;
++    } catch (e) {
++      return folderError(e);
++    }
++  }, [engine]);
++  const renameFolder = useCallback(async (id: number, name: string): Promise<string | null> => {
++    try {
++      await engine.renameFolder(id, name);
++      return null;
++    } catch (e) {
++      return folderError(e);
++    }
++  }, [engine]);
++  const deleteFolder = useCallback((f: Folder, count: number) => {
++    const msg = count > 0
++      ? `Xóa thư mục “${f.name}”?\n${count} ghi chú bên trong sẽ được chuyển ra ngoài, KHÔNG bị xóa.`
++      : `Xóa thư mục trống “${f.name}”?`;
++    if (!confirm(msg)) return;
++    engine.deleteFolder(f.id)
++      .then(() => flash(count > 0 ? `Đã xóa thư mục, ${count} ghi chú đã chuyển ra ngoài` : "Đã xóa thư mục"))
++      .catch((e) => flash(folderError(e)));
++  }, [engine, flash]);
++  const moveNote = useCallback((key: string, folderId: number | null) => {
++    engine.move(key, folderId);
++  }, [engine]);
++  const toggleFolder = useCallback((id: number) => {
++    setUiState((u) => ({
++      ...u,
++      collapsedFolders: u.collapsedFolders.includes(id) ? u.collapsedFolders.filter((x) => x !== id) : [...u.collapsedFolders, id],
++    }));
++  }, []);
++
+   // ---------------------------------------------------------------- hỏi đáp
+   const ask = useCallback(async (q: string) => {
+     setChat((m) => [...m, { id: chatId.current++, role: "user", text: q }]);
+@@ -292,6 +352,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+ 
+   // ---------------------------------------------------------------- dẫn xuất cho giao diện
+   const active = tabs.find((t) => t.id === activeId) ?? null;
++  activeKeyRef.current = active?.key ?? null;
+   const activeNote = active?.key ? byKey.get(active.key) ?? null : null;
+   const noteForPanels = active?.kind === "note" ? activeNote : null;
+   const tabViews: TabView[] = tabs.map((t) => {
+@@ -316,7 +377,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+     { name: "Mở Graph view", hint: "Ctrl+G", run: openGraph },
+     { name: "Chuyển chế độ chỉnh sửa / xem", hint: "Ctrl+E", run: toggleMode },
+     { name: "Chế độ chia đôi (soạn + xem)", hint: "", run: () => setUi({ mode: "split" }) },
+-    { name: "Tải lên file .md / .pdf", hint: "", run: () => fileInput.current?.click() },
++    { name: "Tải lên file .md / .pdf", hint: "", run: () => requestUpload() },
+     { name: "Hỏi đáp trên ghi chú", hint: "", run: openChat },
+     { name: "Bật/tắt thanh bên trái", hint: "", run: () => setUi({ leftOpen: !ui.leftOpen }) },
+     { name: "Bật/tắt thanh bên phải", hint: "", run: () => setUi({ rightOpen: !ui.rightOpen }) },
+@@ -325,7 +386,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+     { name: ui.theme === "dark" ? "Chuyển giao diện sáng" : "Chuyển giao diện tối", hint: "", run: () => setUi({ theme: ui.theme === "dark" ? "light" : "dark" }) },
+     { name: "Cài đặt", hint: "Ctrl+,", run: () => setDialog("settings") },
+     { name: "Đăng xuất", hint: "", run: onLogout },
+-  ], [newNote, openGraph, toggleMode, openChat, setUi, syncNow, ui.leftOpen, ui.rightOpen, ui.theme, onLogout]);
++  ], [newNote, openGraph, toggleMode, openChat, setUi, syncNow, ui.leftOpen, ui.rightOpen, ui.theme, onLogout, requestUpload]);
+ 
+   // ---------------------------------------------------------------- phím tắt
+   useEffect(() => {
+@@ -370,7 +431,9 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+       notes={notes} activeKey={active?.key ?? null} tab={ui.leftTab} setTab={(t) => setUi({ leftTab: t })}
+       noteTags={noteTags} tagCounts={tagCounts} tagFilter={tagFilter} setTagFilter={setTagFilter}
+       api={api} online={online} onOpenKey={openKey} onOpenId={(id) => void openId(id)}
+-      onNew={() => newNote()} onUpload={() => fileInput.current?.click()}
++      onNew={(folderId) => newNote(undefined, "", folderId ?? null)} onUpload={requestUpload}
++      folders={folders} collapsed={ui.collapsedFolders} onToggleFolder={toggleFolder} onMove={moveNote}
++      onDropFiles={dropFiles} onCreateFolder={createFolder} onRenameFolder={renameFolder} onDeleteFolder={deleteFolder}
+     />
+   );
+   const rightEl = ui.rightOpen && (
+@@ -392,7 +455,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+         <Ribbon
+           leftOpen={ui.leftOpen} graphActive={active?.kind === "graph"}
+           onToggleLeft={() => setUi({ leftOpen: !ui.leftOpen })} onNew={() => newNote()}
+-          onSwitcher={() => setDialog("switcher")} onGraph={openGraph} onUpload={() => fileInput.current?.click()}
++          onSwitcher={() => setDialog("switcher")} onGraph={openGraph} onUpload={() => requestUpload()}
+           onChat={openChat} onPalette={() => setDialog("palette")} onSync={syncNow} onSettings={() => setDialog("settings")}
+         />
+         {leftEl && (
+@@ -415,7 +478,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+                   <button className="primary" onClick={() => newNote()}>✚ Ghi chú mới <kbd>Ctrl+N</kbd></button>
+                   <button onClick={() => setDialog("switcher")}>🔎 Mở nhanh <kbd>Ctrl+O</kbd></button>
+                   <button onClick={openGraph}>🕸 Graph view <kbd>Ctrl+G</kbd></button>
+-                  <button onClick={() => fileInput.current?.click()}>⬆ Tải lên .md / .pdf</button>
++                  <button onClick={() => requestUpload()}>⬆ Tải lên .md / .pdf</button>
+                 </div>
+               </div>
+             )}
+@@ -441,6 +504,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+                       fontSize={ui.fontSize} exists={(title) => linkIndex.titleToKey.has(fold(title))}
+                       onOpenTitle={openTitle} onOpenPdf={openPdf} onDelete={deleteNote} onRenamed={renamed}
+                       onTag={(tag) => { setTagFilter(tag); setUi({ leftOpen: true, leftTab: "files" }); }}
++                      folders={folders} onMove={moveNote}
+                       jump={shown ? jump : null}
+                     />
+                   )}
+@@ -473,6 +537,27 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
+                   onPick={(key) => { setDialog(null); openKey(key); }}
+                   onCreate={(title) => { setDialog(null); newNote(title); }} />
+       )}
++      {dialog === "upload" && (
++        <Modal onClose={() => setDialog(null)}>
++          <h3>Tải lên file .md / .pdf</h3>
++          <div className="settings">
++            <label>Lưu vào
++              <select className="select" value={uploadChoice ?? ""} autoFocus
++                      onChange={(e) => setUploadChoice(e.target.value === "" ? null : Number(e.target.value))}>
++                <option value="">Ngoài cùng (không thuộc thư mục nào)</option>
++                {folders.map((f) => <option key={f.id} value={f.id}>📁 {f.name}</option>)}
++              </select>
++            </label>
++            <div className="muted small">Bạn cũng có thể kéo file từ máy tính thả thẳng vào một thư mục ở thanh Tệp.</div>
++            <div className="modal-actions">
++              <button onClick={() => setDialog(null)}>Hủy</button>
++              <button className="primary" onClick={() => { uploadFolder.current = uploadChoice; setDialog(null); fileInput.current?.click(); }}>
++                Chọn file…
++              </button>
++            </div>
++          </div>
++        </Modal>
++      )}
+       {dialog === "palette" && (
+         <Modal onClose={() => setDialog(null)}>
+           <Palette commands={commands} onDone={() => setDialog(null)} />
+diff --git a/frontend/src/components/EditorPane.tsx b/frontend/src/components/EditorPane.tsx
+index 3577c82..a4d9ec4 100644
+--- a/frontend/src/components/EditorPane.tsx
++++ b/frontend/src/components/EditorPane.tsx
+@@ -4,7 +4,7 @@ import Markdown from "./Markdown.tsx";
+ import type { SyncEngine } from "../lib/engine.ts";
+ import { resolveConflicts } from "../lib/merge.ts";
+ import { fuzzyFilter } from "../lib/text.ts";
+-import type { LocalNote } from "../lib/types.ts";
++import type { Folder, LocalNote } from "../lib/types.ts";
+ import type { Mode } from "../lib/ui.ts";
+ 
+ interface Props {
+@@ -21,6 +21,8 @@ interface Props {
+   onRenamed: (key: string, oldTitle: string, newTitle: string) => void;
+   onTag: (tag: string) => void;
+   jump: { line: number; nonce: number } | null;
++  folders: Folder[];
++  onMove: (key: string, folderId: number | null) => void;
+ }
+ 
+ interface Autocomplete {
+@@ -182,6 +184,13 @@ export default function EditorPane(p: Props) {
+                onChange={(e) => engine.edit(note.key, { title: e.target.value })}
+                onBlur={commitTitle}
+                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
++        {(p.folders.length > 0 || note.folder_id !== null) && (
++          <select className="select folder-select" value={note.folder_id ?? ""} title="Thư mục chứa ghi chú này"
++                  aria-label="Thư mục" onChange={(e) => p.onMove(note.key, e.target.value === "" ? null : Number(e.target.value))}>
++            <option value="">📄 Ngoài cùng</option>
++            {p.folders.map((f) => <option key={f.id} value={f.id}>📁 {f.name}</option>)}
++          </select>
++        )}
+         <div className="seg" role="group" aria-label="Chế độ">
+           <button className={p.mode === "edit" ? "active" : ""} title="Chỉnh sửa" onClick={() => p.setMode("edit")}>✎</button>
+           <button className={p.mode === "split" ? "active" : ""} title="Chia đôi" onClick={() => p.setMode("split")}>◫</button>
+diff --git a/frontend/src/components/Sidebars.tsx b/frontend/src/components/Sidebars.tsx
+index 349a073..b3eff16 100644
+--- a/frontend/src/components/Sidebars.tsx
++++ b/frontend/src/components/Sidebars.tsx
+@@ -1,8 +1,9 @@
+ import { useEffect, useMemo, useRef, useState } from "react";
++import type { DragEvent, ReactNode } from "react";
+ import type { ChatSource, HttpApi, RelatedItem, SearchHit } from "../lib/api.ts";
+ import { searchNotes } from "../lib/text.ts";
+ import type { LinkIndex, OutlineItem } from "../lib/text.ts";
+-import type { LocalNote } from "../lib/types.ts";
++import type { Folder, LocalNote } from "../lib/types.ts";
+ import type { LeftTab, RightTab } from "../lib/ui.ts";
+ 
+ const icon = (n: LocalNote) => (n.source === "pdf" ? "📕" : "📄");
+@@ -21,8 +22,18 @@ interface LeftProps {
+   online: boolean;
+   onOpenKey: (key: string) => void;
+   onOpenId: (id: number) => void;
+-  onNew: () => void;
+-  onUpload: () => void;
++  /** folderId: undefined = hỏi người dùng (nút chung), null = ngoài cùng, số = vào thư mục đó. */
++  onNew: (folderId?: number | null) => void;
++  onUpload: (folderId?: number | null) => void;
++  folders: Folder[];
++  collapsed: number[];
++  onToggleFolder: (id: number) => void;
++  onMove: (key: string, folderId: number | null) => void;
++  onDropFiles: (files: FileList, folderId: number | null) => void;
++  /** Trả về thông báo lỗi (để hiện ngay ô nhập) hoặc null nếu thành công. */
++  onCreateFolder: (name: string) => Promise<string | null>;
++  onRenameFolder: (id: number, name: string) => Promise<string | null>;
++  onDeleteFolder: (folder: Folder, count: number) => void;
+ }
+ 
+ export function LeftSidebar(p: LeftProps) {
+@@ -51,18 +62,126 @@ export function LeftSidebar(p: LeftProps) {
+   );
+ }
+ 
++const NOTE_MIME = "application/x-pkm-note";
++type DropTarget = number | "root" | null;
++
++function hasDragType(e: DragEvent, t: string): boolean {
++  return Array.from(e.dataTransfer.types).includes(t);
++}
++
++/** Ô nhập tên thư mục (tạo mới hoặc đổi tên): Enter lưu, Esc hủy, bấm ra ngoài cũng lưu. */
++function FolderNameInput({ initial, onSubmit, onCancel }: {
++  initial: string; onSubmit: (name: string) => Promise<string | null>; onCancel: () => void;
++}) {
++  const [value, setValue] = useState(initial);
++  const [error, setError] = useState<string | null>(null);
++  const busy = useRef(false);
++  const closed = useRef(false); // đã hủy bằng Esc: bỏ qua sự kiện blur khi ô nhập biến mất
++  const cancel = () => {
++    closed.current = true;
++    onCancel();
++  };
++  const submit = async () => {
++    if (busy.current || closed.current) return;
++    const name = value.trim();
++    if (!name || name === initial) return cancel();
++    busy.current = true;
++    const err = await onSubmit(name);
++    busy.current = false;
++    if (err) setError(err);
++  };
++  return (
++    <div className="folder-input">
++      <input autoFocus value={value} placeholder="Tên thư mục" maxLength={100}
++             onChange={(e) => { setValue(e.target.value); setError(null); }}
++             onFocus={(e) => e.target.select()}
++             onKeyDown={(e) => {
++               if (e.key === "Enter") { e.preventDefault(); void submit(); }
++               else if (e.key === "Escape") { e.preventDefault(); cancel(); }
++             }}
++             onBlur={() => { if (!error) void submit(); }} />
++      {error && <div className="form-error small">{error}</div>}
++    </div>
++  );
++}
++
+ function FilesPanel(p: LeftProps) {
+   const [sort, setSort] = useState<"recent" | "name">("recent");
++  const [editing, setEditing] = useState<null | "new" | number>(null); // "new" = đang tạo thư mục; số = đang đổi tên
++  const [dragKey, setDragKey] = useState<string | null>(null);
++  const [over, setOver] = useState<DropTarget>(null);
++
+   const list = useMemo(() => {
+     let l = p.tagFilter ? p.notes.filter((n) => p.noteTags.get(n.key)?.includes(p.tagFilter as string)) : p.notes;
+     if (sort === "name") l = [...l].sort((a, b) => a.title.localeCompare(b.title, "vi"));
+     return l;
+   }, [p.notes, p.tagFilter, p.noteTags, sort]);
++
++  const folderIds = useMemo(() => new Set(p.folders.map((f) => f.id)), [p.folders]);
++  const byFolder = useMemo(() => {
++    const m = new Map<number | null, LocalNote[]>();
++    for (const n of list) {
++      const f = n.folder_id !== null && folderIds.has(n.folder_id) ? n.folder_id : null;
++      const arr = m.get(f) ?? [];
++      arr.push(n);
++      m.set(f, arr);
++    }
++    return m;
++  }, [list, folderIds]);
++  const totals = useMemo(() => {
++    const m = new Map<number, number>();
++    for (const n of p.notes) if (n.folder_id !== null) m.set(n.folder_id, (m.get(n.folder_id) ?? 0) + 1);
++    return m;
++  }, [p.notes]);
++  const draggedFolder = dragKey ? p.notes.find((n) => n.key === dragKey)?.folder_id ?? null : null;
++
++  // ---------------------------------------------------------------- kéo thả (ghi chú trong app, hoặc file từ máy)
++  const dropProps = (target: number | "root") => ({
++    onDragOver: (e: DragEvent) => {
++      if (!hasDragType(e, NOTE_MIME) && !hasDragType(e, "Files")) return;
++      e.preventDefault();
++      e.stopPropagation();
++      e.dataTransfer.dropEffect = hasDragType(e, "Files") ? "copy" : "move";
++      if (over !== target) setOver(target);
++    },
++    onDragLeave: (e: DragEvent) => {
++      if (!e.currentTarget.contains(e.relatedTarget as Node | null) && over === target) setOver(null);
++    },
++    onDrop: (e: DragEvent) => {
++      e.preventDefault();
++      e.stopPropagation();
++      setOver(null);
++      setDragKey(null);
++      const folderId = target === "root" ? null : target;
++      if (e.dataTransfer.files.length) return p.onDropFiles(e.dataTransfer.files, folderId);
++      const key = e.dataTransfer.getData(NOTE_MIME);
++      if (key) p.onMove(key, folderId);
++    },
++  });
++
++  const noteRow = (n: LocalNote, nested: boolean): ReactNode => (
++    <li key={n.key}>
++      <button className={"file-item" + (n.key === p.activeKey ? " active" : "") + (nested ? " nested" : "") + (n.key === dragKey ? " dragging" : "")}
++              draggable onClick={() => p.onOpenKey(n.key)} title={n.title}
++              onDragStart={(e) => { e.dataTransfer.setData(NOTE_MIME, n.key); e.dataTransfer.effectAllowed = "move"; setDragKey(n.key); }}
++              onDragEnd={() => { setDragKey(null); setOver(null); }}>
++        <span className="file-icon">{icon(n)}</span>
++        <span className="file-title">{n.title || "Chưa đặt tên"}</span>
++        {n.has_conflict && <span title="Có xung đột">⚠</span>}
++        {(n.dirty || n.id === null) && <span className="dot" title="Chưa đồng bộ" />}
++      </button>
++    </li>
++  );
++
++  const filtering = !!p.tagFilter;
++  const rootNotes = byFolder.get(null) ?? [];
++
+   return (
+-    <div className="panel">
++    <div className="panel" {...dropProps("root")}>
+       <div className="panel-actions">
+-        <button onClick={p.onNew} title="Ghi chú mới">✚ Mới</button>
+-        <button onClick={p.onUpload} title="Tải lên .md / .pdf">⬆ Tải lên</button>
++        <button onClick={() => p.onNew()} title="Ghi chú mới">✚ Mới</button>
++        <button onClick={() => setEditing("new")} title="Tạo thư mục mới">📁 Thư mục</button>
++        <button onClick={() => p.onUpload()} title="Tải lên .md / .pdf">⬆ Tải lên</button>
+         <button onClick={() => setSort(sort === "recent" ? "name" : "recent")} title="Đổi cách sắp xếp">
+           {sort === "recent" ? "⏱ Mới nhất" : "A–Z"}
+         </button>
+@@ -72,18 +191,54 @@ function FilesPanel(p: LeftProps) {
+           <span className="chip">#{p.tagFilter} <button aria-label="Bỏ lọc" onClick={() => p.setTagFilter(null)}>×</button></span>
+         </div>
+       )}
+-      {list.length === 0 && <div className="muted pad">{p.notes.length === 0 ? "Chưa có ghi chú. Bấm “✚ Mới” hoặc tải lên file." : "Không có ghi chú phù hợp."}</div>}
++      {editing === "new" && (
++        <FolderNameInput initial="" onCancel={() => setEditing(null)}
++                         onSubmit={async (name) => { const err = await p.onCreateFolder(name); if (!err) setEditing(null); return err; }} />
++      )}
++      {list.length === 0 && p.folders.length === 0 && (
++        <div className="muted pad">{p.notes.length === 0 ? "Chưa có ghi chú. Bấm “✚ Mới” hoặc tải lên file." : "Không có ghi chú phù hợp."}</div>
++      )}
++
+       <ul className="file-list">
+-        {list.map((n) => (
+-          <li key={n.key}>
+-            <button className={"file-item" + (n.key === p.activeKey ? " active" : "")} onClick={() => p.onOpenKey(n.key)} title={n.title}>
+-              <span className="file-icon">{icon(n)}</span>
+-              <span className="file-title">{n.title || "Chưa đặt tên"}</span>
+-              {n.has_conflict && <span title="Có xung đột">⚠</span>}
+-              {(n.dirty || n.id === null) && <span className="dot" title="Chưa đồng bộ" />}
+-            </button>
+-          </li>
+-        ))}
++        {p.folders.map((f) => {
++          const items = byFolder.get(f.id) ?? [];
++          if (filtering && items.length === 0) return null;
++          const open = filtering || !p.collapsed.includes(f.id);
++          return (
++            <li key={`f${f.id}`} className={"folder" + (over === f.id ? " drop-over" : "")} {...dropProps(f.id)}>
++              {editing === f.id ? (
++                <FolderNameInput initial={f.name} onCancel={() => setEditing(null)}
++                                 onSubmit={async (name) => { const err = await p.onRenameFolder(f.id, name); if (!err) setEditing(null); return err; }} />
++              ) : (
++                <div className="folder-row">
++                  <button className="folder-head" onClick={() => p.onToggleFolder(f.id)} aria-expanded={open} title={f.name}>
++                    <span className="caret">{open ? "▾" : "▸"}</span>
++                    <span className="file-icon">{open ? "📂" : "📁"}</span>
++                    <span className="file-title">{f.name}</span>
++                    <span className="badge">{totals.get(f.id) ?? 0}</span>
++                  </button>
++                  <span className="folder-actions">
++                    <button title="Ghi chú mới trong thư mục này" aria-label="Ghi chú mới trong thư mục" onClick={() => p.onNew(f.id)}>✚</button>
++                    <button title="Tải file lên thư mục này" aria-label="Tải lên thư mục" onClick={() => p.onUpload(f.id)}>⬆</button>
++                    <button title="Đổi tên thư mục" aria-label="Đổi tên thư mục" onClick={() => setEditing(f.id)}>✎</button>
++                    <button title="Xóa thư mục (ghi chú bên trong được giữ lại)" aria-label="Xóa thư mục" className="danger"
++                            onClick={() => p.onDeleteFolder(f, totals.get(f.id) ?? 0)}>🗑</button>
++                  </span>
++                </div>
++              )}
++              {open && (
++                <ul className="file-list">
++                  {items.map((n) => noteRow(n, true))}
++                  {items.length === 0 && <li className="muted small folder-empty">Trống. Kéo ghi chú vào đây.</li>}
++                </ul>
++              )}
++            </li>
++          );
++        })}
++        {dragKey && draggedFolder !== null && (
++          <li className={"drop-root" + (over === "root" ? " drop-over" : "")}>⤓ Thả vào đây để đưa ra ngoài thư mục</li>
++        )}
++        {rootNotes.map((n) => noteRow(n, false))}
+       </ul>
+     </div>
+   );
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index 1be6f1e..84ac541 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -1,6 +1,6 @@
+ // Máy khách HTTP cho backend (đăng nhập, ghi chú, đồng bộ, hỏi đáp, SSE).
+ import { ApiError, NetworkError } from "./types.ts";
+-import type { Api, RemoteEvent, RemoteNote, UpdateResult } from "./types.ts";
++import type { Api, Folder, RemoteEvent, RemoteNote, UpdateResult } from "./types.ts";
+ import type { GraphData } from "./graphModel.ts";
+ 
+ export interface Session {
+@@ -166,10 +166,10 @@ export class HttpApi implements Api {
+     if (!res.ok) throw await readError(res);
+     return (await res.json()) as RemoteNote;
+   }
+-  createNote(input: { title: string; content: string; client_id: string }): Promise<RemoteNote> {
++  createNote(input: { title: string; content: string; client_id: string; folder_id?: number | null }): Promise<RemoteNote> {
+     return this.json<RemoteNote>("POST", "/api/notes", { json: input });
+   }
+-  async updateNote(id: number, input: { content: string; base_version: number; title?: string }): Promise<UpdateResult> {
++  async updateNote(id: number, input: { content: string; base_version: number; title?: string; folder_id?: number | null }): Promise<UpdateResult> {
+     const res = await this.request("PUT", `/api/notes/${id}`, { json: input });
+     if (res.ok) {
+       const b = (await res.json()) as { result: "ok" | "merged" | "conflict"; note: RemoteNote };
+@@ -184,6 +184,21 @@ export class HttpApi implements Api {
+     if (!res.ok && res.status !== 404) throw await readError(res);
+   }
+ 
++  // --- thư mục
++  listFolders(): Promise<Folder[]> {
++    return this.json("GET", "/api/folders");
++  }
++  createFolder(name: string): Promise<Folder> {
++    return this.json("POST", "/api/folders", { json: { name } });
++  }
++  renameFolder(id: number, name: string): Promise<Folder> {
++    return this.json("PATCH", `/api/folders/${id}`, { json: { name } });
++  }
++  async deleteFolder(id: number): Promise<void> {
++    const res = await this.request("DELETE", `/api/folders/${id}`);
++    if (!res.ok && res.status !== 404) throw await readError(res);
++  }
++
+   // --- tính năng khác
+   related(id: number): Promise<RelatedItem[]> {
+     return this.json("GET", `/api/notes/${id}/related`);
+@@ -197,9 +212,10 @@ export class HttpApi implements Api {
+   chat(question: string, useGraph?: boolean): Promise<{ answer: string; sources: ChatSource[] }> {
+     return this.json("POST", "/api/chat", { json: { question, use_graph: useGraph ?? null } });
+   }
+-  upload(file: File): Promise<RemoteNote> {
++  upload(file: File, folderId: number | null = null): Promise<RemoteNote> {
+     const form = new FormData();
+     form.append("file", file);
++    if (folderId !== null) form.append("folder_id", String(folderId));
+     return this.json("POST", "/api/notes/upload", { form });
+   }
+   /** PDF gốc, tải bằng fetch có token rồi hiển thị bằng blob URL (iframe không gửi được header). */
+diff --git a/frontend/src/lib/engine.ts b/frontend/src/lib/engine.ts
+index 7dd95bd..98aa382 100644
+--- a/frontend/src/lib/engine.ts
++++ b/frontend/src/lib/engine.ts
+@@ -6,7 +6,7 @@
+ //  - Sự kiện từ thiết bị khác: ghi chú sạch thì tải lại; ghi chú đang sửa dở thì đẩy lên để máy chủ gộp.
+ import { conflictBlock, hasConflictMarkers, mergeText } from "./merge.ts";
+ import { ApiError, NetworkError } from "./types.ts";
+-import type { Api, LocalNote, RemoteEvent, RemoteNote, Store } from "./types.ts";
++import type { Api, Folder, LocalNote, RemoteEvent, RemoteNote, Store } from "./types.ts";
+ 
+ export interface EngineOptions {
+   debounceMs?: number;
+@@ -28,6 +28,7 @@ export class SyncEngine {
+ 
+   notes = new Map<string, LocalNote>();
+   snapshot: LocalNote[] = [];
++  folders: Folder[] = []; // danh sách thư mục (lưu kèm IndexedDB để xem được khi ngoại tuyến)
+   listeners = new Set<() => void>();
+ 
+   debounceMs: number;
+@@ -61,6 +62,7 @@ export class SyncEngine {
+     };
+   };
+   getSnapshot = (): LocalNote[] => this.snapshot;
++  getFolders = (): Folder[] => this.folders;
+ 
+   pendingCount(): number {
+     let n = 0;
+@@ -106,9 +108,12 @@ export class SyncEngine {
+   }
+ 
+   async init(): Promise<void> {
+-    for (const n of await this.store.all()) this.notes.set(n.key, n);
++    // Bản ghi lưu trước khi có thư mục: coi như nằm ngoài.
++    for (const n of await this.store.all()) this.notes.set(n.key, { ...n, folder_id: n.folder_id ?? null, base_folder_id: n.base_folder_id ?? null });
+     const c = await this.store.getMeta("cursor");
+     this.cursor = typeof c === "number" ? c : null;
++    const f = await this.store.getMeta("folders");
++    this.folders = Array.isArray(f) ? (f as Folder[]) : [];
+     this.rebuild();
+   }
+ 
+@@ -126,12 +131,13 @@ export class SyncEngine {
+   }
+ 
+   // ---------------------------------------------------------------- thao tác của người dùng
+-  create(title: string, content = ""): LocalNote {
++  create(title: string, content = "", folderId: number | null = null): LocalNote {
+     const n: LocalNote = {
+       key: `local:${this.uuid()}`, id: null, client_id: this.uuid(),
+       title, content, base_title: title, base_content: "", base_version: 0,
+       dirty: true, deleted: false, has_conflict: hasConflictMarkers(content), status: "pending",
+       updated_ms: this.now(), source: "md", has_file: false, file_name: null,
++      folder_id: folderId, base_folder_id: null,
+     };
+     this.set(n);
+     this.schedulePush(n.key);
+@@ -149,6 +155,14 @@ export class SyncEngine {
+     this.schedulePush(key);
+   }
+ 
++  /** Chuyển ghi chú vào thư mục (null = ra ngoài). Dùng được khi ngoại tuyến; không đổi thứ tự "mới nhất". */
++  move(key: string, folderId: number | null): void {
++    const n = this.notes.get(key);
++    if (!n || n.deleted || n.folder_id === folderId) return;
++    this.set({ ...n, folder_id: folderId, dirty: true });
++    this.schedulePush(key, 0);
++  }
++
+   remove(key: string): void {
+     const n = this.notes.get(key);
+     if (!n) return;
+@@ -252,20 +266,27 @@ export class SyncEngine {
+   private async pushCreate(n: LocalNote): Promise<boolean> {
+     const sentContent = n.content;
+     const sentTitle = n.title;
+-    const remote = await this.api.createNote({ title: sentTitle, content: sentContent, client_id: n.client_id ?? this.uuid() });
+-    this.adopt(n.key, remote, sentContent, sentTitle);
++    const sentFolder = n.folder_id;
++    const remote = await this.api.createNote({
++      title: sentTitle, content: sentContent, client_id: n.client_id ?? this.uuid(), folder_id: sentFolder,
++    });
++    this.adopt(n.key, remote, sentContent, sentTitle, sentFolder);
+     return true;
+   }
+ 
+   private async pushUpdate(n: LocalNote): Promise<boolean> {
+     const sentContent = n.content;
+     const sentTitle = n.title;
++    const sentFolder = n.folder_id;
+     const id = n.id as number;
+-    const res = await this.api.updateNote(id, { content: sentContent, base_version: n.base_version, title: sentTitle });
++    const input: { content: string; base_version: number; title: string; folder_id?: number | null } =
++      { content: sentContent, base_version: n.base_version, title: sentTitle };
++    if (sentFolder !== n.base_folder_id) input.folder_id = sentFolder; // chỉ gửi khi đổi thư mục
++    const res = await this.api.updateNote(id, input);
+     const cur = this.notes.get(n.key);
+     if (!cur) return false;
+     if (res.kind === "ok") {
+-      this.adopt(n.key, res.note, sentContent, sentTitle);
++      this.adopt(n.key, res.note, sentContent, sentTitle, sentFolder);
+       return true;
+     }
+     if (res.kind === "notfound") {
+@@ -274,8 +295,9 @@ export class SyncEngine {
+     }
+     if (res.kind === "title_taken") {
+       const title = cur.title === sentTitle ? cur.base_title : cur.title;
+-      this.set({ ...cur, title, dirty: cur.content !== cur.base_content || title !== cur.base_title });
+-      return cur.content !== cur.base_content;
++      const rest = cur.content !== cur.base_content || cur.folder_id !== cur.base_folder_id;
++      this.set({ ...cur, title, dirty: rest || title !== cur.base_title });
++      return rest;
+     }
+     // bad_version: mốc đồng bộ của mình không còn hợp lệ; tải bản máy chủ và giữ cả hai
+     const remote = await this.api.getNote(id);
+@@ -286,25 +308,27 @@ export class SyncEngine {
+     const content = remote.content === cur.content ? cur.content : conflictBlock(remote.content, cur.content);
+     this.set({
+       ...cur, content, base_title: remote.title, base_content: remote.content, base_version: remote.version,
+-      dirty: true, has_conflict: hasConflictMarkers(content), status: remote.status,
++      base_folder_id: remote.folder_id, dirty: true, has_conflict: hasConflictMarkers(content), status: remote.status,
+     });
+     return true;
+   }
+ 
+   private recreate(n: LocalNote): void {
+-    this.set({ ...n, id: null, client_id: this.uuid(), base_version: 0, base_content: "", base_title: n.title, dirty: true });
++    this.set({ ...n, id: null, client_id: this.uuid(), base_version: 0, base_content: "", base_title: n.title, base_folder_id: null, dirty: true });
+   }
+ 
+   /** Nhận phản hồi của máy chủ; nếu người dùng đã gõ thêm trong lúc chờ thì gộp lại bản gõ thêm. */
+-  private adopt(key: string, remote: RemoteNote, sentContent: string, sentTitle: string): void {
++  private adopt(key: string, remote: RemoteNote, sentContent: string, sentTitle: string, sentFolder: number | null): void {
+     const cur = this.notes.get(key);
+     if (!cur) return;
+     const content = cur.content === sentContent ? remote.content : mergeText(sentContent, remote.content, cur.content).text;
+     const title = cur.title === sentTitle ? remote.title : cur.title;
++    // Máy chủ có thể đưa ra ngoài nếu thư mục đã bị xóa; nếu người dùng vừa kéo sang thư mục khác thì giữ lựa chọn mới.
++    const folderId = cur.folder_id === sentFolder ? remote.folder_id : cur.folder_id;
+     this.set({
+-      ...cur, id: remote.id, title, content,
+-      base_title: remote.title, base_content: remote.content, base_version: remote.version,
+-      dirty: content !== remote.content || title !== remote.title || cur.deleted,
++      ...cur, id: remote.id, title, content, folder_id: folderId,
++      base_title: remote.title, base_content: remote.content, base_version: remote.version, base_folder_id: remote.folder_id,
++      dirty: content !== remote.content || title !== remote.title || folderId !== remote.folder_id || cur.deleted,
+       has_conflict: hasConflictMarkers(content), status: remote.status,
+       source: remote.source, has_file: remote.has_file, file_name: remote.file_name,
+     });
+@@ -322,6 +346,7 @@ export class SyncEngine {
+       base_title: r.title, base_content: r.content, base_version: r.version,
+       dirty: false, deleted: false, has_conflict: r.has_conflict, status: r.status,
+       updated_ms: this.serverMs(r.updated_at), source: r.source, has_file: r.has_file, file_name: r.file_name,
++      folder_id: r.folder_id ?? null, base_folder_id: r.folder_id ?? null,
+     };
+   }
+ 
+@@ -346,9 +371,52 @@ export class SyncEngine {
+     this.schedulePush(n.key, 0);
+   }
+ 
++  // ---------------------------------------------------------------- thư mục (thao tác cần mạng)
++  private setFolders(list: Folder[]): void {
++    this.folders = [...list].sort((a, b) => a.name.localeCompare(b.name, "vi") || a.id - b.id);
++    this.writes = this.writes.then(() => this.store.setMeta("folders", this.folders)).catch((e) => console.error("IndexedDB", e));
++    this.rebuild();
++  }
++
++  async refreshFolders(): Promise<void> {
++    const list = await this.api.listFolders();
++    this.setFolders(list);
++    // Thư mục không còn trên máy chủ: ghi chú cục bộ trỏ tới nó được coi như nằm ngoài.
++    const ids = new Set(list.map((f) => f.id));
++    for (const n of [...this.notes.values()]) this.forgetFolder(n, ids);
++  }
++
++  private forgetFolder(n: LocalNote, alive: Set<number>): void {
++    const lost = (f: number | null) => f !== null && !alive.has(f);
++    if (!lost(n.folder_id) && !lost(n.base_folder_id)) return;
++    const folder_id = lost(n.folder_id) ? null : n.folder_id;
++    const base_folder_id = lost(n.base_folder_id) ? null : n.base_folder_id;
++    this.set({ ...n, folder_id, base_folder_id, dirty: n.dirty && (n.content !== n.base_content || n.title !== n.base_title || folder_id !== base_folder_id || n.id === null) });
++  }
++
++  async createFolder(name: string): Promise<Folder> {
++    const f = await this.api.createFolder(name);
++    this.setFolders([...this.folders.filter((x) => x.id !== f.id), f]);
++    return f;
++  }
++
++  async renameFolder(id: number, name: string): Promise<void> {
++    const f = await this.api.renameFolder(id, name);
++    this.setFolders(this.folders.map((x) => (x.id === id ? f : x)));
++  }
++
++  /** Xóa thư mục: ghi chú bên trong ra ngoài, không bị xóa. Máy chủ gửi sự kiện để mọi thiết bị tải lại. */
++  async deleteFolder(id: number): Promise<void> {
++    await this.api.deleteFolder(id);
++    const alive = new Set(this.folders.filter((x) => x.id !== id).map((x) => x.id));
++    this.setFolders(this.folders.filter((x) => x.id !== id));
++    for (const n of [...this.notes.values()]) this.forgetFolder(n, alive);
++  }
++
+   /** Lần đồng bộ đầu (hoặc khi mất con trỏ): lấy toàn bộ ghi chú và đối chiếu với bản cục bộ. */
+   async bootstrap(): Promise<void> {
+     const cursor = await this.api.cursor(); // lấy con trỏ TRƯỚC khi liệt kê để không sót sự kiện
++    await this.refreshFolders();
+     const remotes = await this.api.listNotes();
+     const seen = new Set<number>();
+     for (const r of remotes) {
+@@ -370,11 +438,18 @@ export class SyncEngine {
+       return;
+     }
+     const { events } = await this.api.changes(this.cursor);
+-    for (const ev of events) await this.handleEvent(ev);
++    await this.refreshFolders();
++    for (const ev of events) if (ev.type !== "folder") await this.handleEvent(ev);
++    if (events.length) await this.setCursor(events[events.length - 1].id);
+     await this.syncAll();
+   }
+ 
+   async handleEvent(ev: RemoteEvent): Promise<void> {
++    if (ev.type === "folder") {
++      if (!(ev.device_id && ev.device_id === this.deviceId)) await this.refreshFolders();
++      await this.setCursor(ev.id);
++      return;
++    }
+     if (ev.device_id && ev.device_id === this.deviceId) {
+       await this.setCursor(ev.id); // sự kiện do chính phiên này gây ra: đã nhận qua phản hồi
+       return;
+diff --git a/frontend/src/lib/types.ts b/frontend/src/lib/types.ts
+index 5e74517..cef2110 100644
+--- a/frontend/src/lib/types.ts
++++ b/frontend/src/lib/types.ts
+@@ -11,11 +11,18 @@ export interface RemoteNote {
+   source: string; // "md" | "pdf"
+   has_file: boolean; // có file PDF gốc trên máy chủ
+   file_name: string | null;
++  folder_id: number | null; // null = nằm ngoài, không thuộc thư mục nào
++}
++
++export interface Folder {
++  id: number;
++  name: string;
++  created_at: string;
+ }
+ 
+ export interface RemoteEvent {
+   id: number;
+-  type: "created" | "updated" | "deleted";
++  type: "created" | "updated" | "deleted" | "folder"; // "folder": note_id là id thư mục
+   note_id: number;
+   version: number;
+   device_id: string | null;
+@@ -40,6 +47,8 @@ export interface LocalNote {
+   source: string;
+   has_file: boolean;
+   file_name: string | null;
++  folder_id: number | null;
++  base_folder_id: number | null; // thư mục tại phiên bản đồng bộ gần nhất
+ }
+ 
+ export type UpdateResult =
+@@ -53,9 +62,14 @@ export interface Api {
+   cursor(): Promise<number>;
+   changes(since: number): Promise<{ cursor: number; events: RemoteEvent[] }>;
+   getNote(id: number): Promise<RemoteNote | null>;
+-  createNote(input: { title: string; content: string; client_id: string }): Promise<RemoteNote>;
+-  updateNote(id: number, input: { content: string; base_version: number; title?: string }): Promise<UpdateResult>;
++  createNote(input: { title: string; content: string; client_id: string; folder_id?: number | null }): Promise<RemoteNote>;
++  /** folder_id chỉ gửi khi đổi thư mục (null = đưa ra ngoài). */
++  updateNote(id: number, input: { content: string; base_version: number; title?: string; folder_id?: number | null }): Promise<UpdateResult>;
+   deleteNote(id: number): Promise<void>; // 404 coi như đã xóa
++  listFolders(): Promise<Folder[]>;
++  createFolder(name: string): Promise<Folder>;
++  renameFolder(id: number, name: string): Promise<Folder>;
++  deleteFolder(id: number): Promise<void>; // ghi chú bên trong chuyển ra ngoài
+ }
+ 
+ export interface Store {
+diff --git a/frontend/src/lib/ui.ts b/frontend/src/lib/ui.ts
+index 92027cb..ee4b9ea 100644
+--- a/frontend/src/lib/ui.ts
++++ b/frontend/src/lib/ui.ts
+@@ -14,6 +14,7 @@ export interface UiState {
+   leftW: number;
+   rightW: number;
+   chatUseGraph: boolean;
++  collapsedFolders: number[]; // thư mục đang thu gọn ở thanh Tệp
+ }
+ 
+ const KEY = "pkm.ui";
+@@ -23,6 +24,7 @@ export function defaultUi(): UiState {
+   return {
+     theme: "dark", fontSize: 16, mode: "edit", leftOpen: !narrow(), rightOpen: false,
+     leftTab: "files", rightTab: "links", leftW: 270, rightW: 300, chatUseGraph: false,
++    collapsedFolders: [],
+   };
+ }
+ 
+diff --git a/frontend/src/styles.css b/frontend/src/styles.css
+index 556a6b8..54fa8b0 100644
+--- a/frontend/src/styles.css
++++ b/frontend/src/styles.css
+@@ -105,6 +105,27 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
+ .chip { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-bg); color: var(--accent); border-radius: 12px; padding: 2px 4px 2px 10px; }
+ .chip button { border: 0; background: transparent; padding: 0 6px; }
+ .file-list { list-style: none; margin: 0; padding: 0; }
++.file-item[draggable="true"] { cursor: pointer; }
++.file-item.nested { padding-left: 30px; }
++.file-item.dragging { opacity: 0.45; }
++.folder { border-radius: 6px; }
++.folder.drop-over, .drop-root.drop-over { background: var(--accent-bg); outline: 1px dashed var(--accent); }
++.folder-row { display: flex; align-items: center; border-radius: 6px; }
++.folder-row:hover { background: var(--bg3); }
++.folder-head { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-align: left; background: transparent; border: 0; padding: 6px 8px; font-weight: 600; }
++.folder-head .caret { width: 10px; color: var(--muted); font-size: 11px; flex: none; }
++.folder-head .badge { font-weight: 400; }
++.folder-actions { display: flex; gap: 1px; padding-right: 4px; opacity: 0; transition: opacity 0.1s; }
++.folder-row:hover .folder-actions, .folder-row:focus-within .folder-actions { opacity: 1; }
++.folder-actions button { border: 0; background: transparent; padding: 2px 5px; font-size: 12px; color: var(--muted); }
++.folder-actions button:hover { color: var(--fg); background: var(--bg2); }
++.folder-actions button.danger:hover { color: var(--danger); }
++.folder-empty { padding: 4px 8px 6px 34px; }
++.folder-input { padding: 2px 4px 4px; display: flex; flex-direction: column; gap: 4px; }
++.folder-input input { padding: 5px 8px; }
++.drop-root { margin: 4px 0; padding: 8px; text-align: center; color: var(--muted); font-size: 12px; border: 1px dashed var(--border); border-radius: 6px; }
++.select { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; color: inherit; font: inherit; max-width: 100%; }
++.folder-select { max-width: 180px; font-size: 13px; }
+ .file-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 6px; padding: 6px 8px; }
+ .file-item:hover { background: var(--bg3); }
+ .file-item.active { background: var(--accent-bg); color: var(--accent); }
+@@ -243,6 +264,10 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
+ .toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 60; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; max-width: 90vw; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); }
+ 
+ /* ---------------------------------------------------------------- điện thoại: sidebar thành ngăn kéo */
++@media (hover: none) {
++  .folder-actions { opacity: 1; }
++}
++
+ @media (max-width: 799px) {
+   body { font-size: 15px; }
+   .ribbon { width: 40px; }
+diff --git a/frontend/tests/engine.test.ts b/frontend/tests/engine.test.ts
+index e1b3f3a..7716470 100644
+--- a/frontend/tests/engine.test.ts
++++ b/frontend/tests/engine.test.ts
+@@ -2,6 +2,7 @@ import test from "node:test";
+ import assert from "node:assert/strict";
+ import { SyncEngine } from "../src/lib/engine.ts";
+ import { FakeServer, MemStore, firstKey, mk } from "./helpers.ts";
++import type { LocalNote } from "../src/lib/types.ts";
+ 
+ test("create and edit push to the server and stay clean", async () => {
+   const server = new FakeServer();
+@@ -300,3 +301,135 @@ test("refreshStatus picks up indexing progress without touching content", async
+   await A.engine.refreshStatus(key); // ngoại tuyến: không lỗi, không đổi
+   assert.equal(A.engine.notes.get(key)!.status, "ready");
+ });
++
++// ---------------------------------------------------------------- thư mục
++test("create in a folder, move between folders, and only send folder_id when it changed", async () => {
++  const server = new FakeServer();
++  const A = mk(server, "A");
++  await A.engine.init();
++  await A.engine.bootstrap();
++  const f1 = await A.engine.createFolder("Đồ án");
++  const f2 = await A.engine.createFolder("Ăn uống");
++  assert.deepEqual(A.engine.getFolders().map((f) => f.name), ["Ăn uống", "Đồ án"]);
++  const n = A.engine.create("KH", "x", f1.id);
++  await A.engine.settle();
++  assert.equal(server.notes.get(1)!.folder_id, f1.id);
++
++  A.engine.edit(n.key, { content: "x sửa" });
++  await A.engine.settle();
++  assert.equal("folder_id" in A.api.lastUpdate!, false);
++
++  const before = A.engine.notes.get(n.key)!.updated_ms;
++  A.engine.move(n.key, f2.id);
++  await A.engine.settle();
++  assert.equal(A.api.lastUpdate!.folder_id, f2.id);
++  assert.equal(server.notes.get(1)!.folder_id, f2.id);
++  const local = A.engine.notes.get(n.key)!;
++  assert.deepEqual([local.folder_id, local.base_folder_id, local.dirty, local.updated_ms], [f2.id, f2.id, false, before]);
++
++  A.engine.move(n.key, null);
++  await A.engine.settle();
++  assert.equal(A.api.lastUpdate!.folder_id, null);
++  assert.equal(server.notes.get(1)!.folder_id, null);
++});
++
++test("offline move is pushed later and other devices pick it up", async () => {
++  const server = new FakeServer();
++  const A = mk(server, "A");
++  const B = mk(server, "B");
++  await A.engine.init(); await B.engine.init();
++  await A.engine.bootstrap();
++  const f = await A.engine.createFolder("F");
++  A.engine.create("KH", "a\n");
++  await A.engine.settle();
++  await B.engine.bootstrap();
++  assert.deepEqual(B.engine.getFolders().map((x) => x.name), ["F"]);
++
++  A.api.offline = true;
++  A.engine.move(firstKey(A.engine), f.id);
++  await A.engine.settle();
++  assert.equal(A.engine.pendingCount(), 1);
++  assert.equal(server.notes.get(1)!.folder_id, null);
++  A.api.offline = false;
++  await A.engine.syncAll(); await A.engine.settle();
++  assert.equal(server.notes.get(1)!.folder_id, f.id);
++
++  await B.engine.catchUp(); await B.engine.settle();
++  assert.equal(B.engine.notes.get(firstKey(B.engine))!.folder_id, f.id);
++});
++
++test("deleting a folder moves its notes out on every device; nothing is lost", async () => {
++  const server = new FakeServer();
++  const A = mk(server, "A");
++  const B = mk(server, "B");
++  await A.engine.init(); await B.engine.init();
++  await A.engine.bootstrap();
++  const f = await A.engine.createFolder("F");
++  A.engine.create("N1", "một", f.id);
++  A.engine.create("N2", "hai", f.id);
++  await A.engine.settle();
++  await B.engine.bootstrap(); await B.engine.settle();
++
++  B.api.offline = true;
++  const k2 = B.engine.keyById(2)!;
++  B.engine.edit(k2, { content: "hai sửa ở B" }); // B đang sửa dở khi thư mục bị xóa
++  await B.engine.settle();
++
++  await A.engine.deleteFolder(f.id);
++  assert.deepEqual(A.engine.getFolders(), []);
++  assert.ok([...A.engine.notes.values()].every((n) => n.folder_id === null));
++  for (const ev of server.events.filter((e) => e.id > (A.engine.cursor ?? 0))) await A.engine.handleEvent(ev);
++  await A.engine.settle();
++  assert.equal(A.engine.getSnapshot().length, 2);
++  assert.ok(A.engine.getSnapshot().every((n) => !n.dirty && n.base_version === 2));
++
++  B.api.offline = false;
++  await B.engine.catchUp(); await B.engine.settle();
++  assert.deepEqual(B.engine.getFolders(), []);
++  assert.ok(B.engine.getSnapshot().every((n) => n.folder_id === null));
++  assert.equal(server.notes.size, 2);
++  assert.equal(server.notes.get(2)!.content, "hai sửa ở B");
++  assert.equal(server.notes.get(2)!.folder_id, null);
++  assert.equal(B.engine.pendingCount(), 0);
++});
++
++test("moving into a folder that was deleted elsewhere falls back to the root", async () => {
++  const server = new FakeServer();
++  const A = mk(server, "A");
++  const B = mk(server, "B");
++  await A.engine.init(); await B.engine.init();
++  await A.engine.bootstrap();
++  const f = await A.engine.createFolder("F");
++  A.engine.create("KH", "x");
++  await A.engine.settle();
++  await B.engine.bootstrap();
++
++  B.api.offline = true;
++  B.engine.move(firstKey(B.engine), f.id);
++  await B.engine.settle();
++  await A.engine.deleteFolder(f.id);
++  B.api.offline = false;
++  await B.engine.catchUp(); await B.engine.settle();
++  assert.equal(server.notes.get(1)!.folder_id, null);
++  assert.equal(B.engine.notes.get(firstKey(B.engine))!.folder_id, null);
++  assert.equal(B.engine.pendingCount(), 0);
++});
++
++test("folders survive a restart for offline display; old records without folder_id load as root", async () => {
++  const server = new FakeServer();
++  const store = new MemStore();
++  const one = mk(server, "A", store);
++  await one.engine.init();
++  await one.engine.bootstrap();
++  await one.engine.createFolder("F");
++  one.engine.create("KH", "x");
++  await one.engine.settle();
++  const raw = store.notes.get(firstKey(one.engine))! as Partial<LocalNote>;
++  delete raw.folder_id;
++  delete raw.base_folder_id;
++  const two = new SyncEngine(one.api, store, { debounceMs: 0, retry: false, deviceId: "A2" });
++  await two.init();
++  assert.deepEqual(two.getFolders().map((f) => f.name), ["F"]);
++  const n = two.notes.get(firstKey(two))!;
++  assert.deepEqual([n.folder_id, n.base_folder_id], [null, null]);
++});
+diff --git a/frontend/tests/helpers.ts b/frontend/tests/helpers.ts
+index b5dcc63..2030d18 100644
+--- a/frontend/tests/helpers.ts
++++ b/frontend/tests/helpers.ts
+@@ -2,7 +2,7 @@
+ import { SyncEngine } from "../src/lib/engine.ts";
+ import { conflictBlock, hasConflictMarkers, mergeText } from "../src/lib/merge.ts";
+ import { NetworkError } from "../src/lib/types.ts";
+-import type { Api, LocalNote, RemoteEvent, RemoteNote, Store, UpdateResult } from "../src/lib/types.ts";
++import type { Api, Folder, LocalNote, RemoteEvent, RemoteNote, Store, UpdateResult } from "../src/lib/types.ts";
+ 
+ type ServerNote = RemoteNote & { client_id: string | null };
+ const pub = (n: ServerNote): RemoteNote => {
+@@ -17,6 +17,8 @@ export class FakeServer {
+   notes = new Map<number, ServerNote>();
+   versions = new Map<string, { title: string; content: string }>();
+   events: RemoteEvent[] = [];
++  folders = new Map<number, Folder>();
++  nextFolder = 1;
+ 
+   ts(): string {
+     return "2026-11-09 08:00:" + String(this.clock++ % 60).padStart(2, "0");
+@@ -30,20 +32,41 @@ export class FakeServer {
+     for (let i = 2; titles.has(c); i++) c = `${t} (${i})`;
+     return c;
+   }
+-  create(input: { title: string; content: string; client_id: string | null }, device: string | null): RemoteNote {
++  validFolder(f: number | null | undefined): number | null {
++    return f !== null && f !== undefined && this.folders.has(f) ? f : null;
++  }
++  createFolder(name: string, device: string | null): Folder {
++    const f: Folder = { id: this.nextFolder++, name, created_at: this.ts() };
++    this.folders.set(f.id, f);
++    this.emit("folder", f.id, 0, device);
++    return f;
++  }
++  deleteFolder(id: number, device: string | null): void {
++    for (const n of this.notes.values()) {
++      if (n.folder_id !== id) continue;
++      n.folder_id = null;
++      n.version += 1;
++      this.versions.set(`${n.id}:${n.version}`, { title: n.title, content: n.content });
++      this.emit("updated", n.id, n.version, null); // device null: mọi thiết bị tải lại
++    }
++    this.folders.delete(id);
++    this.emit("folder", id, 0, device);
++  }
++  create(input: { title: string; content: string; client_id: string | null; folder_id?: number | null }, device: string | null): RemoteNote {
+     for (const n of this.notes.values()) if (input.client_id && n.client_id === input.client_id) return pub(n);
+     const id = this.nextId++;
+     const n: ServerNote = {
+       id, title: this.uniqueTitle(input.title), content: input.content, version: 1,
+       has_conflict: hasConflictMarkers(input.content), status: "pending", updated_at: this.ts(),
+       source: "md", has_file: false, file_name: null, client_id: input.client_id,
++      folder_id: this.validFolder(input.folder_id),
+     };
+     this.notes.set(id, n);
+     this.versions.set(`${id}:1`, { title: n.title, content: n.content });
+     this.emit("created", id, 1, device);
+     return pub(n);
+   }
+-  update(id: number, input: { content: string; base_version: number; title?: string }, device: string | null): UpdateResult {
++  update(id: number, input: { content: string; base_version: number; title?: string; folder_id?: number | null }, device: string | null): UpdateResult {
+     const n = this.notes.get(id);
+     if (!n) return { kind: "notfound" };
+     if (input.base_version < 1 || input.base_version > n.version) return { kind: "bad_version" };
+@@ -62,8 +85,10 @@ export class FakeServer {
+       if (base && input.title && input.title !== base.title && n.title === base.title) title = input.title.trim();
+     }
+     if (title !== n.title && [...this.notes.values()].some((o) => o.id !== id && o.title === title)) return { kind: "title_taken" };
+-    if (content !== n.content || title !== n.title) {
++    const folder = "folder_id" in input ? this.validFolder(input.folder_id) : n.folder_id;
++    if (content !== n.content || title !== n.title || folder !== n.folder_id) {
+       n.version += 1;
++      n.folder_id = folder;
+       n.content = content;
+       n.title = title;
+       n.has_conflict = hasConflictMarkers(content);
+@@ -116,7 +141,7 @@ export class FakeApi implements Api {
+     const n = this.server.notes.get(id);
+     return n ? pub(n) : null;
+   }
+-  async createNote(input: { title: string; content: string; client_id: string }): Promise<RemoteNote> {
++  async createNote(input: { title: string; content: string; client_id: string; folder_id?: number | null }): Promise<RemoteNote> {
+     this.check();
+     const r = this.server.create(input, this.device);
+     if (this.dropNext) {
+@@ -125,7 +150,9 @@ export class FakeApi implements Api {
+     }
+     return r;
+   }
+-  async updateNote(id: number, input: { content: string; base_version: number; title?: string }): Promise<UpdateResult> {
++  lastUpdate: { content: string; base_version: number; title?: string; folder_id?: number | null } | null = null;
++  async updateNote(id: number, input: { content: string; base_version: number; title?: string; folder_id?: number | null }): Promise<UpdateResult> {
++    this.lastUpdate = input;
+     this.check();
+     const r = this.server.update(id, input, this.device);
+     if (this.gate) await this.gate;
+@@ -139,6 +166,25 @@ export class FakeApi implements Api {
+     this.check();
+     this.server.remove(id, this.device);
+   }
++  async listFolders(): Promise<Folder[]> {
++    this.check();
++    return [...this.server.folders.values()].map((f) => ({ ...f }));
++  }
++  async createFolder(name: string): Promise<Folder> {
++    this.check();
++    return { ...this.server.createFolder(name, this.device) };
++  }
++  async renameFolder(id: number, name: string): Promise<Folder> {
++    this.check();
++    const f = this.server.folders.get(id)!;
++    f.name = name;
++    this.server.emit("folder", id, 0, this.device);
++    return { ...f };
++  }
++  async deleteFolder(id: number): Promise<void> {
++    this.check();
++    this.server.deleteFolder(id, this.device);
++  }
+ }
+ 
+ export class MemStore implements Store {

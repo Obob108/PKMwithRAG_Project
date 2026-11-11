@@ -179,7 +179,8 @@ def test_upload_markdown(client):
 
 # ---------------------------------------------------------------- dang ky, cau hinh, file goc
 def test_config_and_register_flow(client):
-    assert client.get("/api/config").json() == {"allow_registration": True, "invite_required": False}
+    assert client.get("/api/config").json() == {"allow_registration": True, "invite_required": False,
+                                                "hcaptcha_sitekey": None}
     r = client.post("/api/auth/register", json={"username": "carol", "password": "matkhau-dai"})
     assert r.status_code == 201
     h = {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -234,3 +235,26 @@ def test_list_full_and_pdf_original_is_stored_and_owner_only(client):
     assert nodes["Bai bao"]["has_file"] is True and nodes["Thuong"]["has_file"] is False
     assert client.delete(f"/api/notes/{n['id']}", headers=ha).status_code == 204
     assert client.get(f"/api/notes/{n['id']}/file", headers=ha).status_code == 404
+
+
+def test_hcaptcha_required_for_login_and_register(tmp_path, monkeypatch):
+    from app.core import captcha
+    seen = []
+
+    def fake_verify(secret, token, sitekey=None, timeout=5.0):
+        seen.append((secret, token, sitekey))
+        return token == "ok-token"
+
+    monkeypatch.setattr(captcha, "verify_hcaptcha", fake_verify)
+    s = Settings(data_dir=tmp_path, jwt_secret="t", hcaptcha_sitekey="site", hcaptcha_secret="sec")
+    with TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores())) as c:
+        assert c.get("/api/config").json()["hcaptcha_sitekey"] == "site"
+        reg = {"username": "eve", "password": "matkhau-dai"}
+        assert c.post("/api/auth/register", json=reg).status_code == 400
+        assert c.post("/api/auth/register", json={**reg, "captcha_token": "sai"}).status_code == 400
+        assert c.post("/api/auth/register", json={**reg, "captcha_token": "ok-token"}).status_code == 201
+        form = {"username": "eve", "password": "matkhau-dai"}
+        assert c.post("/api/auth/login", data=form).status_code == 400
+        assert c.post("/api/auth/login", data={**form, "captcha_token": "sai"}).status_code == 400
+        assert c.post("/api/auth/login", data={**form, "captcha_token": "ok-token"}).status_code == 200
+    assert ("sec", "ok-token", "site") in seen

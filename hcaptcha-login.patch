@@ -1,0 +1,482 @@
+diff --git a/backend/.env.example b/backend/.env.example
+index 647d06a..3f03cfd 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -7,3 +7,7 @@ DATA_DIR=../data
+ # Dang ky tai khoan: dat false de tat; INVITE_CODE khac rong = bat buoc nhap ma moi khi dang ky
+ ALLOW_REGISTRATION=true
+ INVITE_CODE=
++# hCaptcha (https://dashboard.hcaptcha.com): dat ca hai de bat captcha khi dang nhap/dang ky; de trong = tat.
++# Khoa thu cua hCaptcha (luon qua): sitekey 10000000-ffff-ffff-ffff-000000000001, secret 0x0000000000000000000000000000000000000000
++HCAPTCHA_SITEKEY=
++HCAPTCHA_SECRET=
+diff --git a/backend/app/api/routes.py b/backend/app/api/routes.py
+index c819379..2271029 100644
+--- a/backend/app/api/routes.py
++++ b/backend/app/api/routes.py
+@@ -7,13 +7,14 @@ import time
+ import uuid
+ from pathlib import Path
+ 
+-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request,
++from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Query, Request,
+                      Response, UploadFile)
+ from fastapi.responses import FileResponse, StreamingResponse
+ from fastapi.security import OAuth2PasswordRequestForm
+ from pydantic import BaseModel, Field
+ from starlette.concurrency import run_in_threadpool
+ 
++from ..core import captcha
+ from ..core.db import connect
+ from ..core.security import create_token, hash_password, verify_password
+ from ..services import notes as notes_svc
+@@ -45,6 +46,7 @@ class RegisterRequest(BaseModel):
+     username: str = Field(min_length=3, max_length=32)
+     password: str = Field(min_length=8, max_length=128)
+     invite_code: str | None = Field(default=None, max_length=128)
++    captcha_token: str | None = Field(default=None, max_length=8192)
+ 
+ 
+ USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+@@ -81,6 +83,15 @@ def _client_ip(request: Request) -> str:
+     return request.client.host if request.client else "unknown"
+ 
+ 
++def _check_captcha(request: Request, token: str | None) -> None:
++    """Khi bat hCaptcha: token phai hop le (xac minh voi may chu hCaptcha), neu khong tra 400."""
++    s = request.app.state.settings
++    if not s.captcha_enabled:
++        return
++    if not token or not captcha.verify_hcaptcha(s.hcaptcha_secret, token, s.hcaptcha_sitekey):
++        raise HTTPException(status_code=400, detail="Vui lòng hoàn thành captcha")
++
++
+ def _token_for(request: Request, user_id: int) -> dict:
+     s = request.app.state.settings
+     return {"access_token": create_token(user_id, s.jwt_secret, s.jwt_expire_minutes), "token_type": "bearer"}
+@@ -89,15 +100,18 @@ def _token_for(request: Request, user_id: int) -> dict:
+ @router.get("/config")
+ def public_config(request: Request):
+     s = request.app.state.settings
+-    return {"allow_registration": s.allow_registration, "invite_required": bool(s.invite_code)}
++    return {"allow_registration": s.allow_registration, "invite_required": bool(s.invite_code),
++            "hcaptcha_sitekey": s.hcaptcha_sitekey if s.captcha_enabled else None}
+ 
+ 
+ @router.post("/auth/login")
+-def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), conn=Depends(get_conn)):
++def login(request: Request, form: OAuth2PasswordRequestForm = Depends(),
++          captcha_token: str | None = Form(default=None), conn=Depends(get_conn)):
+     limiter = request.app.state.login_limiter
+     key = f"{_client_ip(request)}|{form.username.lower()}"
+     if limiter.blocked(key):
+         raise HTTPException(status_code=429, detail="Đăng nhập sai quá nhiều lần, thử lại sau vài phút")
++    _check_captcha(request, captcha_token)
+     row = conn.execute("SELECT id, password_hash FROM users WHERE username = ?", (form.username,)).fetchone()
+     if row is None or not verify_password(row["password_hash"], form.password):
+         limiter.hit(key)
+@@ -115,6 +129,7 @@ def register(body: RegisterRequest, request: Request, conn=Depends(get_conn)):
+     key = _client_ip(request)
+     if limiter.blocked(key):
+         raise HTTPException(status_code=429, detail="Đăng ký quá nhiều lần, thử lại sau")
++    _check_captcha(request, body.captcha_token)
+     if s.invite_code and not hmac.compare_digest((body.invite_code or "").encode(), s.invite_code.encode()):
+         limiter.hit(key)
+         raise HTTPException(status_code=403, detail="Mã mời không đúng")
+diff --git a/backend/app/core/captcha.py b/backend/app/core/captcha.py
+new file mode 100644
+index 0000000..09dc13a
+--- /dev/null
++++ b/backend/app/core/captcha.py
+@@ -0,0 +1,29 @@
++"""Xac minh hCaptcha phia may chu (token chi dung duoc mot lan, het han sau ~2 phut).
++
++Bat bang cach dat ca HCAPTCHA_SITEKEY va HCAPTCHA_SECRET trong .env; de trong = tat captcha.
++"""
++import logging
++
++import httpx
++
++log = logging.getLogger(__name__)
++
++VERIFY_URL = "https://api.hcaptcha.com/siteverify"
++
++
++def verify_hcaptcha(secret: str, token: str, sitekey: str | None = None, timeout: float = 5.0) -> bool:
++    if not token:
++        return False
++    data = {"secret": secret, "response": token}
++    if sitekey:
++        data["sitekey"] = sitekey
++    try:
++        r = httpx.post(VERIFY_URL, data=data, timeout=timeout)
++        r.raise_for_status()
++        body = r.json()
++    except (httpx.HTTPError, ValueError):
++        log.warning("Khong goi duoc may chu hCaptcha", exc_info=True)
++        return False
++    if not body.get("success"):
++        log.info("hCaptcha tu choi: %s", body.get("error-codes"))
++    return bool(body.get("success"))
+diff --git a/backend/app/core/config.py b/backend/app/core/config.py
+index ddf9b95..a89795d 100644
+--- a/backend/app/core/config.py
++++ b/backend/app/core/config.py
+@@ -22,6 +22,14 @@ class Settings(BaseSettings):
+     allow_registration: bool = True
+     invite_code: str = ""
+ 
++    # hCaptcha: dat CA HAI de bat (bat buoc giai captcha khi dang nhap/dang ky); de trong = tat
++    hcaptcha_sitekey: str = ""
++    hcaptcha_secret: str = ""
++
++    @property
++    def captcha_enabled(self) -> bool:
++        return bool(self.hcaptcha_sitekey and self.hcaptcha_secret)
++
+     # Semantic linking (tau phai chinh bang thuc nghiem, xem SPEC.md muc 4)
+     link_top_k: int = 5
+     link_threshold: float = 0.65
+diff --git a/backend/tests/test_api.py b/backend/tests/test_api.py
+index 97a2c74..c67c517 100644
+--- a/backend/tests/test_api.py
++++ b/backend/tests/test_api.py
+@@ -179,7 +179,8 @@ def test_upload_markdown(client):
+ 
+ # ---------------------------------------------------------------- dang ky, cau hinh, file goc
+ def test_config_and_register_flow(client):
+-    assert client.get("/api/config").json() == {"allow_registration": True, "invite_required": False}
++    assert client.get("/api/config").json() == {"allow_registration": True, "invite_required": False,
++                                                "hcaptcha_sitekey": None}
+     r = client.post("/api/auth/register", json={"username": "carol", "password": "matkhau-dai"})
+     assert r.status_code == 201
+     h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+@@ -234,3 +235,26 @@ def test_list_full_and_pdf_original_is_stored_and_owner_only(client):
+     assert nodes["Bai bao"]["has_file"] is True and nodes["Thuong"]["has_file"] is False
+     assert client.delete(f"/api/notes/{n['id']}", headers=ha).status_code == 204
+     assert client.get(f"/api/notes/{n['id']}/file", headers=ha).status_code == 404
++
++
++def test_hcaptcha_required_for_login_and_register(tmp_path, monkeypatch):
++    from app.core import captcha
++    seen = []
++
++    def fake_verify(secret, token, sitekey=None, timeout=5.0):
++        seen.append((secret, token, sitekey))
++        return token == "ok-token"
++
++    monkeypatch.setattr(captcha, "verify_hcaptcha", fake_verify)
++    s = Settings(data_dir=tmp_path, jwt_secret="t", hcaptcha_sitekey="site", hcaptcha_secret="sec")
++    with TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores())) as c:
++        assert c.get("/api/config").json()["hcaptcha_sitekey"] == "site"
++        reg = {"username": "eve", "password": "matkhau-dai"}
++        assert c.post("/api/auth/register", json=reg).status_code == 400
++        assert c.post("/api/auth/register", json={**reg, "captcha_token": "sai"}).status_code == 400
++        assert c.post("/api/auth/register", json={**reg, "captcha_token": "ok-token"}).status_code == 201
++        form = {"username": "eve", "password": "matkhau-dai"}
++        assert c.post("/api/auth/login", data=form).status_code == 400
++        assert c.post("/api/auth/login", data={**form, "captcha_token": "sai"}).status_code == 400
++        assert c.post("/api/auth/login", data={**form, "captcha_token": "ok-token"}).status_code == 200
++    assert ("sec", "ok-token", "site") in seen
+diff --git a/frontend/src/components/AuthScreen.tsx b/frontend/src/components/AuthScreen.tsx
+index 8d62be3..a67c7b3 100644
+--- a/frontend/src/components/AuthScreen.tsx
++++ b/frontend/src/components/AuthScreen.tsx
+@@ -1,16 +1,31 @@
+-import { useEffect, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ import type { FormEvent } from "react";
++import HCaptcha from "./HCaptcha.tsx";
++import type { HCaptchaHandle } from "./HCaptcha.tsx";
+ import { getConfig, login, register } from "../lib/api.ts";
+ import type { PublicConfig, Session } from "../lib/api.ts";
+ import { ApiError, NetworkError } from "../lib/types.ts";
+ 
++function EyeIcon({ off }: { off: boolean }) {
++  return (
++    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
++      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
++      <circle cx="12" cy="12" r="3" />
++      {off && <line x1="3" y1="3" x2="21" y2="21" />}
++    </svg>
++  );
++}
++
+ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void }) {
+   const [mode, setMode] = useState<"login" | "register">("login");
+-  const [cfg, setCfg] = useState<PublicConfig>({ allow_registration: true, invite_required: false });
++  const [cfg, setCfg] = useState<PublicConfig>({ allow_registration: true, invite_required: false, hcaptcha_sitekey: null });
+   const [username, setUsername] = useState("");
+   const [password, setPassword] = useState("");
+   const [confirm, setConfirm] = useState("");
+   const [invite, setInvite] = useState("");
++  const [showPw, setShowPw] = useState(false);
++  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
++  const captchaRef = useRef<HCaptchaHandle>(null);
+   const [error, setError] = useState<string | null>(null);
+   const [busy, setBusy] = useState(false);
+ 
+@@ -18,6 +33,9 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void
+     getConfig().then(setCfg).catch(() => undefined);
+   }, []);
+ 
++  const captchaOn = !!cfg.hcaptcha_sitekey;
++  const canSubmit = !busy && (!captchaOn || !!captchaToken);
++
+   const switchMode = (m: "login" | "register") => {
+     setMode(m);
+     setError(null);
+@@ -31,14 +49,19 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void
+       if (password.length < 8) return setError("Mật khẩu cần ít nhất 8 ký tự");
+       if (password !== confirm) return setError("Hai mật khẩu không khớp");
+     }
++    if (captchaOn && !captchaToken) return setError("Vui lòng hoàn thành captcha");
+     setBusy(true);
+     try {
+-      const s = mode === "login" ? await login("", username.trim(), password) : await register("", username.trim(), password, invite.trim());
++      const token = captchaToken ?? undefined;
++      const s = mode === "login"
++        ? await login("", username.trim(), password, token)
++        : await register("", username.trim(), password, invite.trim(), token);
+       onLogin(s);
+     } catch (err) {
+       if (err instanceof ApiError) setError(err.detail || "Có lỗi xảy ra");
+       else if (err instanceof NetworkError) setError("Không kết nối được máy chủ. Kiểm tra mạng hoặc backend đang chạy.");
+       else setError("Có lỗi không xác định");
++      captchaRef.current?.reset(); // token captcha chỉ dùng được một lần: bắt giải lại
+     } finally {
+       setBusy(false);
+     }
+@@ -47,8 +70,8 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void
+   return (
+     <div className="auth-wrap">
+       <form className="auth-card" onSubmit={submit}>
+-        <h1>🧠 Tri thức cá nhân</h1>
+-        <p className="muted">Ghi chú Markdown, tự liên kết ngữ nghĩa, hỏi đáp trên chính ghi chú của bạn.</p>
++        <h1>Người ghi chú</h1>
++        <p className="muted">Welcome</p>
+         {cfg.allow_registration && (
+           <div className="auth-tabs" role="tablist">
+             <button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>Đăng nhập</button>
+@@ -59,12 +82,20 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void
+           <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
+         </label>
+         <label>Mật khẩu
+-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} required />
++          <span className="pw-field">
++            <input type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
++                   autoComplete={mode === "login" ? "current-password" : "new-password"} required />
++            <button type="button" className="pw-toggle" onClick={() => setShowPw(!showPw)}
++                    aria-label={showPw ? "Ẩn mật khẩu" : "Hiện mật khẩu"} aria-pressed={showPw}
++                    title={showPw ? "Ẩn mật khẩu" : "Hiện mật khẩu"}>
++              <EyeIcon off={showPw} />
++            </button>
++          </span>
+         </label>
+         {mode === "register" && (
+           <>
+             <label>Nhập lại mật khẩu
+-              <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />
++              <input type={showPw ? "text" : "password"} value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />
+             </label>
+             {cfg.invite_required && (
+               <label>Mã mời
+@@ -73,8 +104,15 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void
+             )}
+           </>
+         )}
++        {captchaOn && (
++          <HCaptcha ref={captchaRef} sitekey={cfg.hcaptcha_sitekey as string}
++                    onVerify={(t) => { setCaptchaToken(t); setError(null); }}
++                    onExpire={() => setCaptchaToken(null)}
++                    onError={setError} />
++        )}
+         {error && <div className="form-error" role="alert">{error}</div>}
+-        <button className="primary" type="submit" disabled={busy}>
++        <button className="primary" type="submit" disabled={!canSubmit}
++                title={captchaOn && !captchaToken ? "Hoàn thành captcha trước" : undefined}>
+           {busy ? "Đang xử lý…" : mode === "login" ? "Đăng nhập" : "Tạo tài khoản"}
+         </button>
+         {!cfg.allow_registration && <p className="muted small">Máy chủ đang tắt đăng ký. Hãy nhờ quản trị viên tạo tài khoản.</p>}
+diff --git a/frontend/src/components/HCaptcha.tsx b/frontend/src/components/HCaptcha.tsx
+new file mode 100644
+index 0000000..eb86d27
+--- /dev/null
++++ b/frontend/src/components/HCaptcha.tsx
+@@ -0,0 +1,97 @@
++// Widget hCaptcha tối giản: tự nạp script của hCaptcha một lần, render vào một <div>, báo token qua onVerify.
++// Token chỉ dùng được MỘT lần và hết hạn sau ~2 phút: gọi ref.reset() sau mỗi lần gửi thất bại.
++import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
++
++interface HCaptchaApi {
++  render(el: HTMLElement, opts: Record<string, unknown>): string;
++  reset(id?: string): void;
++  remove(id?: string): void;
++}
++declare global {
++  interface Window {
++    hcaptcha?: HCaptchaApi;
++    __pkmHcaptchaReady?: () => void;
++  }
++}
++
++let loader: Promise<HCaptchaApi> | null = null;
++
++function loadHCaptcha(): Promise<HCaptchaApi> {
++  if (window.hcaptcha) return Promise.resolve(window.hcaptcha);
++  if (loader) return loader;
++  loader = new Promise<HCaptchaApi>((resolve, reject) => {
++    window.__pkmHcaptchaReady = () => resolve(window.hcaptcha as HCaptchaApi);
++    const s = document.createElement("script");
++    s.src = "https://js.hcaptcha.com/1/api.js?render=explicit&onload=__pkmHcaptchaReady&recaptchacompat=off";
++    s.async = true;
++    s.defer = true;
++    s.onerror = () => {
++      loader = null;
++      s.remove();
++      reject(new Error("Không tải được hCaptcha"));
++    };
++    document.head.appendChild(s);
++  });
++  return loader;
++}
++
++export interface HCaptchaHandle {
++  reset(): void;
++}
++
++interface Props {
++  sitekey: string;
++  theme?: "light" | "dark";
++  onVerify: (token: string) => void;
++  onExpire: () => void;
++  onError?: (msg: string) => void;
++}
++
++const HCaptcha = forwardRef<HCaptchaHandle, Props>(function HCaptcha({ sitekey, theme = "light", onVerify, onExpire, onError }, ref) {
++  const boxRef = useRef<HTMLDivElement>(null);
++  const widgetId = useRef<string | null>(null);
++  const cb = useRef({ onVerify, onExpire, onError });
++  cb.current = { onVerify, onExpire, onError };
++
++  useImperativeHandle(ref, () => ({
++    reset() {
++      if (widgetId.current !== null) window.hcaptcha?.reset(widgetId.current);
++      cb.current.onExpire();
++    },
++  }), []);
++
++  useEffect(() => {
++    let cancelled = false;
++    loadHCaptcha()
++      .then((hc) => {
++        if (cancelled || !boxRef.current) return;
++        widgetId.current = hc.render(boxRef.current, {
++          sitekey,
++          theme,
++          callback: (token: string) => cb.current.onVerify(token),
++          "expired-callback": () => cb.current.onExpire(),
++          "chalexpired-callback": () => cb.current.onExpire(),
++          "error-callback": () => {
++            cb.current.onExpire();
++            cb.current.onError?.("Captcha gặp lỗi, hãy thử lại.");
++          },
++        });
++      })
++      .catch(() => cb.current.onError?.("Không tải được captcha. Kiểm tra kết nối mạng hoặc trình chặn quảng cáo."));
++    return () => {
++      cancelled = true;
++      if (widgetId.current !== null) {
++        try {
++          window.hcaptcha?.remove(widgetId.current);
++        } catch {
++          // widget đã bị gỡ
++        }
++        widgetId.current = null;
++      }
++    };
++  }, [sitekey, theme]);
++
++  return <div className="captcha-box" ref={boxRef} />;
++});
++
++export default HCaptcha;
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index 1be6f1e..b8bde51 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -11,6 +11,8 @@ export interface Session {
+ export interface PublicConfig {
+   allow_registration: boolean;
+   invite_required: boolean;
++  /** Khác null = máy chủ bắt buộc giải hCaptcha khi đăng nhập/đăng ký. */
++  hcaptcha_sitekey?: string | null;
+ }
+ export interface RelatedItem {
+   note_id: number;
+@@ -84,22 +86,25 @@ async function sessionFromToken(base: string, token: string): Promise<Session> {
+   return { token, username: me.username, userId: me.id };
+ }
+ 
+-export async function login(base: string, username: string, password: string): Promise<Session> {
++export async function login(base: string, username: string, password: string, captchaToken?: string): Promise<Session> {
++  const form = new URLSearchParams({ username, password });
++  if (captchaToken) form.set("captcha_token", captchaToken);
+   const res = await doFetch(`${base}/api/auth/login`, {
+     method: "POST",
+     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+-    body: new URLSearchParams({ username, password }).toString(),
++    body: form.toString(),
+   });
+   if (!res.ok) throw await readError(res);
+   const { access_token } = (await res.json()) as { access_token: string };
+   return sessionFromToken(base, access_token);
+ }
+ 
+-export async function register(base: string, username: string, password: string, inviteCode?: string): Promise<Session> {
++export async function register(base: string, username: string, password: string, inviteCode?: string,
++                               captchaToken?: string): Promise<Session> {
+   const res = await doFetch(`${base}/api/auth/register`, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+-    body: JSON.stringify({ username, password, invite_code: inviteCode || null }),
++    body: JSON.stringify({ username, password, invite_code: inviteCode || null, captcha_token: captchaToken || null }),
+   });
+   if (!res.ok) throw await readError(res);
+   const { access_token } = (await res.json()) as { access_token: string };
+diff --git a/frontend/src/styles.css b/frontend/src/styles.css
+index 556a6b8..856fc07 100644
+--- a/frontend/src/styles.css
++++ b/frontend/src/styles.css
+@@ -61,7 +61,12 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
+ .boot { height: 100%; display: grid; place-items: center; color: var(--muted); }
+ 
+ /* ---------------------------------------------------------------- đăng nhập */
+-.auth-wrap { height: 100%; display: grid; place-items: center; padding: 16px; overflow: auto; }
++.auth-wrap { height: 100%; display: grid; place-items: center; padding: 16px; overflow: auto; background: #b0d2e1; }
++.pw-field { position: relative; display: block; }
++.pw-field input { padding-right: 40px; }
++.pw-toggle { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); width: 32px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; }
++.pw-toggle:hover:not(:disabled) { color: var(--fg); }
++.captcha-box { min-height: 78px; display: flex; justify-content: center; }
+ .auth-card { width: 100%; max-width: 380px; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+ .auth-card h1 { margin: 0; font-size: 22px; }
+ .auth-card p { margin: 0; }
+diff --git a/frontend/tests/api.test.ts b/frontend/tests/api.test.ts
+index 8d9d50c..345b6d2 100644
+--- a/frontend/tests/api.test.ts
++++ b/frontend/tests/api.test.ts
+@@ -54,7 +54,12 @@ test("login and register build a session via /api/me", async () => {
+   assert.equal(calls[0].init.body, "username=alice&password=pw");
+   const r = await register("", "bob", "matkhau-dai", "ma");
+   assert.equal(r.token, "T");
+-  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { username: "bob", password: "matkhau-dai", invite_code: "ma" });
++  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { username: "bob", password: "matkhau-dai", invite_code: "ma", captcha_token: null });
++  const c2 = stub((url) => url.endsWith("/api/me") ? json({ id: 9, username: "alice" }) : json({ access_token: "T", token_type: "bearer" }));
++  await login("", "alice", "pw", "cap-tok");
++  assert.equal(c2[0].init.body, "username=alice&password=pw&captcha_token=cap-tok");
++  await register("", "bob", "matkhau-dai", "", "cap-tok");
++  assert.equal(JSON.parse(String(c2[2].init.body)).captcha_token, "cap-tok");
+   stub(() => json({ detail: "Sai tên đăng nhập hoặc mật khẩu" }, 401));
+   await assert.rejects(() => login("", "a", "b"), (e: unknown) => e instanceof ApiError && e.detail.includes("Sai"));
+ });

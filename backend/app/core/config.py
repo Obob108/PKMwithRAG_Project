@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     allow_registration: bool = True
     invite_code: str = ""
 
+    # hCaptcha: dat CA HAI de bat (bat buoc giai captcha khi dang nhap/dang ky); de trong = tat
+    hcaptcha_sitekey: str = ""
+    hcaptcha_secret: str = ""
+
+    @property
+    def captcha_enabled(self) -> bool:
+        return bool(self.hcaptcha_sitekey and self.hcaptcha_secret)
+
     # Semantic linking (tau phai chinh bang thuc nghiem, xem SPEC.md muc 4)
     link_top_k: int = 5
     link_threshold: float = 0.65

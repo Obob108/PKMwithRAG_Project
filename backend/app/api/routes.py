@@ -7,13 +7,14 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request,
+from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Query, Request,
                      Response, UploadFile)
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from ..core import captcha
 from ..core.db import connect
 from ..core.security import create_token, hash_password, verify_password
 from ..services import notes as notes_svc
@@ -45,6 +46,7 @@ class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=8, max_length=128)
     invite_code: str | None = Field(default=None, max_length=128)
+    captcha_token: str | None = Field(default=None, max_length=8192)
 
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -81,6 +83,15 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _check_captcha(request: Request, token: str | None) -> None:
+    """Khi bat hCaptcha: token phai hop le (xac minh voi may chu hCaptcha), neu khong tra 400."""
+    s = request.app.state.settings
+    if not s.captcha_enabled:
+        return
+    if not token or not captcha.verify_hcaptcha(s.hcaptcha_secret, token, s.hcaptcha_sitekey):
+        raise HTTPException(status_code=400, detail="Vui lòng hoàn thành captcha")
+
+
 def _token_for(request: Request, user_id: int) -> dict:
     s = request.app.state.settings
     return {"access_token": create_token(user_id, s.jwt_secret, s.jwt_expire_minutes), "token_type": "bearer"}
@@ -89,15 +100,18 @@ def _token_for(request: Request, user_id: int) -> dict:
 @router.get("/config")
 def public_config(request: Request):
     s = request.app.state.settings
-    return {"allow_registration": s.allow_registration, "invite_required": bool(s.invite_code)}
+    return {"allow_registration": s.allow_registration, "invite_required": bool(s.invite_code),
+            "hcaptcha_sitekey": s.hcaptcha_sitekey if s.captcha_enabled else None}
 
 
 @router.post("/auth/login")
-def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), conn=Depends(get_conn)):
+def login(request: Request, form: OAuth2PasswordRequestForm = Depends(),
+          captcha_token: str | None = Form(default=None), conn=Depends(get_conn)):
     limiter = request.app.state.login_limiter
     key = f"{_client_ip(request)}|{form.username.lower()}"
     if limiter.blocked(key):
         raise HTTPException(status_code=429, detail="Đăng nhập sai quá nhiều lần, thử lại sau vài phút")
+    _check_captcha(request, captcha_token)
     row = conn.execute("SELECT id, password_hash FROM users WHERE username = ?", (form.username,)).fetchone()
     if row is None or not verify_password(row["password_hash"], form.password):
         limiter.hit(key)
@@ -115,6 +129,7 @@ def register(body: RegisterRequest, request: Request, conn=Depends(get_conn)):
     key = _client_ip(request)
     if limiter.blocked(key):
         raise HTTPException(status_code=429, detail="Đăng ký quá nhiều lần, thử lại sau")
+    _check_captcha(request, body.captcha_token)
     if s.invite_code and not hmac.compare_digest((body.invite_code or "").encode(), s.invite_code.encode()):
         limiter.hit(key)
         raise HTTPException(status_code=403, detail="Mã mời không đúng")
