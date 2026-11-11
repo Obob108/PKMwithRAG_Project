@@ -1,0 +1,4 @@
+# VI DU DINH DANG: phan tu gold_notes la ten file, hoac danh sach cac nguon thay the nhau (chi can tim thay mot).
+# Moi dong mot cau; dong bat dau bang # bi bo qua. Tao file that: eval/questions.jsonl
+{"id": "ex1", "question": "Nên chia chunk theo kích thước nào?", "gold_notes": ["08_Chunking_Strategy"], "type": "direct", "lang": "vi"}
+{"id": "ex2", "question": "How do we make sure answers cite the right source?", "gold_notes": ["11_Prompt_Design_for_RAG", "12_Citations_and_Grounding"], "type": "multi", "lang": "en"}

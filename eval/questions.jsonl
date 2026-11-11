@@ -1,0 +1,41 @@
+# BAN NHAP do AI soan tu noi dung 21 file ghi chu; NGUOI DUNG PHAI KIEM TRA lai tung cau + gold_notes.
+# gold_notes: phan tu la ten file (khong duoi); danh sach long = cac nguon thay the nhau (noi dung trung).
+{"id": "d01", "question": "Vòng đời tri thức trong PKM gồm những giai đoạn nào?", "gold_notes": [["01_Personal_Knowledge_Management", "Tom_tat_PKM_Semantic_Linking"]], "type": "direct", "lang": "vi"}
+{"id": "d02", "question": "Công thức tính cosine similarity là gì?", "gold_notes": ["02_Semantic_Search"], "type": "direct", "lang": "vi"}
+{"id": "d03", "question": "Khi nội dung ghi chú thay đổi thì xử lý embedding thế nào, và vì sao không nên so sánh vector của các mô hình khác nhau?", "gold_notes": ["03_Embeddings"], "type": "direct", "lang": "vi"}
+{"id": "d04", "question": "Semantic linking có thể ghi nhận những loại quan hệ nào giữa các ghi chú?", "gold_notes": ["04_Semantic_Linking"], "type": "direct", "lang": "vi"}
+{"id": "d05", "question": "Khác biệt giữa PDF text và PDF scan là gì?", "gold_notes": ["07_Document_Ingestion"], "type": "direct", "lang": "vi"}
+{"id": "d06", "question": "Nên thử chunk bao nhiêu token và overlap bao nhiêu token?", "gold_notes": ["08_Chunking_Strategy"], "type": "direct", "lang": "vi"}
+{"id": "d07", "question": "Có những lựa chọn vector store nào cho MVP và khi nào nên dùng pgvector?", "gold_notes": ["09_Vector_Database"], "type": "direct", "lang": "vi"}
+{"id": "d08", "question": "Reranking là gì và có thể dùng mô hình nào?", "gold_notes": ["10_Retrieval_and_Reranking"], "type": "direct", "lang": "vi"}
+{"id": "d09", "question": "Prompt mẫu cho RAG gồm những quy tắc nào?", "gold_notes": [["11_Prompt_Design_for_RAG", "Tom_tat_RAG_Question_Answering"]], "type": "direct", "lang": "vi"}
+{"id": "d10", "question": "Citation không tự đảm bảo câu trả lời đúng, vậy cần kiểm tra những gì?", "gold_notes": ["12_Citations_and_Grounding"], "type": "direct", "lang": "vi"}
+{"id": "d11", "question": "Kiến trúc đề xuất chia thành những lớp nào?", "gold_notes": ["13_System_Architecture"], "type": "direct", "lang": "vi"}
+{"id": "d12", "question": "Bảng Links trong thiết kế dữ liệu gồm những trường nào?", "gold_notes": ["14_Data_Model"], "type": "direct", "lang": "vi"}
+{"id": "d13", "question": "Endpoint nào dùng để lấy gợi ý ghi chú liên quan?", "gold_notes": ["15_API_Design"], "type": "direct", "lang": "vi"}
+{"id": "d14", "question": "Khi dùng API AI bên ngoài cần lưu ý gì về quyền riêng tư?", "gold_notes": ["17_Privacy_and_Security"], "type": "direct", "lang": "vi"}
+{"id": "d15", "question": "Tiêu chí hoàn thành MVP là gì?", "gold_notes": ["18_Roadmap_MVP"], "type": "direct", "lang": "vi"}
+{"id": "d16", "question": "Tên đề tài và hai năng lực chính của ứng dụng là gì?", "gold_notes": ["00_Tong_quan_de_tai"], "type": "direct", "lang": "vi"}
+{"id": "d17", "question": "What is hybrid search and when is it useful?", "gold_notes": ["10_Retrieval_and_Reranking"], "type": "direct", "lang": "en"}
+{"id": "d18", "question": "Besides similarity search, which operations should a vector store support?", "gold_notes": ["09_Vector_Database"], "type": "direct", "lang": "en"}
+{"id": "d19", "question": "Which fields should each chunk keep so that answers can cite their sources?", "gold_notes": [["12_Citations_and_Grounding", "Tom_tat_RAG_Question_Answering", "08_Chunking_Strategy"]], "type": "direct", "lang": "en"}
+{"id": "d20", "question": "What are the stages of the RAG pipeline?", "gold_notes": [["05_RAG_Overview", "Tom_tat_RAG_Question_Answering"]], "type": "direct", "lang": "en"}
+{"id": "m21", "question": "Để hỏi đáp có trích dẫn đúng trang PDF, cần lưu metadata gì khi nạp tài liệu và hiển thị nguồn ra sao?", "gold_notes": ["07_Document_Ingestion", ["12_Citations_and_Grounding", "Tom_tat_RAG_Question_Answering"]], "type": "multi", "lang": "vi"}
+{"id": "m22", "question": "Khi một ghi chú được sửa, cần cập nhật những gì để chỉ mục vector và các liên kết không bị lỗi thời?", "gold_notes": ["03_Embeddings", "13_System_Architecture"], "type": "multi", "lang": "vi"}
+{"id": "m23", "question": "Làm sao đảm bảo không lộ dữ liệu của người dùng khác khi truy xuất, xét cả yêu cầu bảo mật và bước retrieval?", "gold_notes": ["17_Privacy_and_Security", ["10_Retrieval_and_Reranking", "09_Vector_Database"]], "type": "multi", "lang": "vi"}
+{"id": "m24", "question": "Từ lúc tải PDF lên đến khi nhận câu trả lời kèm nguồn, dữ liệu đi qua những bước nào và gọi những API nào?", "gold_notes": ["07_Document_Ingestion", ["05_RAG_Overview", "Tom_tat_RAG_Question_Answering"], "15_API_Design"], "type": "multi", "lang": "vi"}
+{"id": "m25", "question": "Làm thế nào kết hợp semantic linking với tìm kiếm từ khóa để giảm các liên kết yếu?", "gold_notes": ["04_Semantic_Linking", ["10_Retrieval_and_Reranking", "02_Semantic_Search"]], "type": "multi", "lang": "vi"}
+{"id": "m26", "question": "Nên chọn FAISS hay pgvector, xét cả kiến trúc lưu trữ lẫn thiết kế bảng dữ liệu?", "gold_notes": ["09_Vector_Database", "14_Data_Model"], "type": "multi", "lang": "vi"}
+{"id": "m27", "question": "Khi người dùng chấp nhận hoặc bỏ qua một liên kết gợi ý thì trạng thái được lưu ở đâu và API nào hiển thị các liên kết đó?", "gold_notes": ["14_Data_Model", "15_API_Design"], "type": "multi", "lang": "vi"}
+{"id": "m28", "question": "Để câu trả lời không bịa, prompt và việc hiển thị nguồn cần phối hợp với nhau thế nào?", "gold_notes": [["11_Prompt_Design_for_RAG", "Tom_tat_RAG_Question_Answering"], ["12_Citations_and_Grounding", "Tom_tat_RAG_Question_Answering"]], "type": "multi", "lang": "vi"}
+{"id": "m29", "question": "Semantic linking có rủi ro gì và cần kiểm thử ra sao để giảm liên kết sai?", "gold_notes": [["04_Semantic_Linking", "Tom_tat_PKM_Semantic_Linking"], "16_Evaluation_Testing"], "type": "multi", "lang": "vi"}
+{"id": "m30", "question": "Cần chuẩn hóa tài liệu thế nào trước khi chia chunk, và mỗi chunk nên giữ metadata gì?", "gold_notes": ["07_Document_Ingestion", "08_Chunking_Strategy"], "type": "multi", "lang": "vi"}
+{"id": "m31", "question": "How do the data model and the API together support showing why two notes are related?", "gold_notes": ["14_Data_Model", "15_API_Design"], "type": "multi", "lang": "en"}
+{"id": "m32", "question": "Which privacy requirements apply to the chat endpoint and to the external LLM API?", "gold_notes": ["17_Privacy_and_Security", "15_API_Design"], "type": "multi", "lang": "en"}
+{"id": "m33", "question": "How should retrieval be evaluated, and which techniques could improve its results?", "gold_notes": ["16_Evaluation_Testing", "10_Retrieval_and_Reranking"], "type": "multi", "lang": "en"}
+{"id": "m34", "question": "Mô tả luồng từ lúc tạo ghi chú đến lúc ghi chú đó xuất hiện trong danh sách ghi chú liên quan.", "gold_notes": ["13_System_Architecture", ["04_Semantic_Linking", "Tom_tat_PKM_Semantic_Linking"]], "type": "multi", "lang": "vi"}
+{"id": "m35", "question": "Roadmap MVP gồm những giai đoạn nào, và giai đoạn kiểm thử cuối cùng cần kiểm tra những gì?", "gold_notes": ["18_Roadmap_MVP", "16_Evaluation_Testing"], "type": "multi", "lang": "vi"}
+{"id": "m36", "question": "How is Vietnamese language quality handled in the choice of embedding model and in PDF extraction?", "gold_notes": ["02_Semantic_Search", "07_Document_Ingestion"], "type": "multi", "lang": "en"}
+{"id": "m37", "question": "Việc chọn tham số chunking và chọn ngưỡng similarity có điểm chung gì về cách xác định giá trị phù hợp?", "gold_notes": ["08_Chunking_Strategy", ["04_Semantic_Linking", "Tom_tat_PKM_Semantic_Linking"]], "type": "multi", "lang": "vi"}
+{"id": "m38", "question": "Để hỏi đáp tiếng Việt chính xác, những khâu nào từ nạp tài liệu, embedding đến prompt cần chú ý?", "gold_notes": ["07_Document_Ingestion", "02_Semantic_Search", ["11_Prompt_Design_for_RAG", "Tom_tat_RAG_Question_Answering"]], "type": "multi", "lang": "vi"}
+{"id": "m39", "question": "What has to be deleted when a user removes a document, in both the database and the vector index?", "gold_notes": [["16_Evaluation_Testing", "17_Privacy_and_Security"], "09_Vector_Database"], "type": "multi", "lang": "en"}

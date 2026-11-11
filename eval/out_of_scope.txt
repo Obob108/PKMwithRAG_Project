@@ -1,0 +1,7 @@
+# Cau hoi NGOAI pham vi ghi chu - dung de kiem tra he thong co tu choi hop ly khong (cham tay, khong dung cho run_eval).
+Thủ đô của Pháp là gì?
+Cách nấu phở bò ngon nhất?
+Giá cổ phiếu của Google hôm nay là bao nhiêu?
+Ghi chú nào nói về thuật toán sắp xếp nổi bọt?
+Hãy cho biết số trang của tài liệu RAG_Overview.pdf.
+What is the capital of Japan?

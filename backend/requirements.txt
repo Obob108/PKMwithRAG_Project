@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-multipart
+numpy
+faiss-cpu
+networkx
+sentence-transformers
+pymupdf
+google-genai
+argon2-cffi
+pyjwt
+pytest
+httpx
