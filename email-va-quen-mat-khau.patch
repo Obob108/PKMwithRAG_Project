@@ -1,0 +1,486 @@
+diff --git a/README.md b/README.md
+index 7d99653..0713449 100644
+--- a/README.md
++++ b/README.md
+@@ -26,7 +26,7 @@ python scripts/smoke_models.py
+ 
+ ## Tạo user và nhập thư mục ghi chú
+ ```
+-python scripts/create_user.py alice
++python scripts/create_user.py alice alice@gmail.com
+ python scripts/import_folder.py --user alice --dir "C:\duong\dan\thu_muc_ghi_chu"
+ ```
+ Tiêu đề ghi chú = tên file (không có đuôi), khớp với [[wiki-link]] kiểu Obsidian.
+diff --git a/SPEC.md b/SPEC.md
+index 58455a5..87da880 100644
+--- a/SPEC.md
++++ b/SPEC.md
+@@ -83,7 +83,7 @@ Markdown hiển thị bằng AST tự viết, KHÔNG dùng innerHTML (không XSS
+ - Liên kết ngữ nghĩa: lấy mẫu ~50 cặp cạnh, tự gán nhãn, precision theo từng τ.
+ 
+ ## 9. Ngoài phạm vi
+-Không Electron, OCR/PDF scan, đồng bộ Drive/Dropbox, mã hóa dữ liệu, xác minh email/quên mật khẩu,
++Không Electron, OCR/PDF scan, đồng bộ Drive/Dropbox, mã hóa dữ liệu, xác minh email (quên mật khẩu chỉ ở mức demo: đặt lại theo email, không gửi mã xác nhận),
+ nhiều người dùng đại trà (đăng ký có sẵn nhưng chỉ ở mức demo: giới hạn tốc độ trong bộ nhớ, mã mời tùy chọn). Hạn chế: ghi chú và đoạn trích gửi tới API LLM (không local-first).
+ 
+ ## 10. Lộ trình đến 15/12
+diff --git a/backend/app/api/routes.py b/backend/app/api/routes.py
+index c819379..1acc2db 100644
+--- a/backend/app/api/routes.py
++++ b/backend/app/api/routes.py
+@@ -43,11 +43,27 @@ class NoteUpdate(BaseModel):
+ 
+ class RegisterRequest(BaseModel):
+     username: str = Field(min_length=3, max_length=32)
++    email: str = Field(min_length=11, max_length=254)
+     password: str = Field(min_length=8, max_length=128)
+     invite_code: str | None = Field(default=None, max_length=128)
+ 
+ 
++class ResetPasswordRequest(BaseModel):
++    email: str = Field(min_length=11, max_length=254)
++    new_password: str = Field(min_length=8, max_length=128)
++
++
+ USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
++# Chi nhan dia chi Gmail: chu, so, dau cham (khong o dau/cuoi, khong lien tiep) + @gmail.com
++GMAIL_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)*@gmail\.com$")
++
++
++def _gmail(raw: str) -> str:
++    """Chuan hoa (bo khoang trang, ve chu thuong) va kiem tra dinh dang Gmail."""
++    email = raw.strip().lower()
++    if not GMAIL_RE.match(email):
++        raise HTTPException(status_code=422, detail="Email phải là địa chỉ Gmail hợp lệ (vd: ten@gmail.com)")
++    return email
+ 
+ 
+ class ChatRequest(BaseModel):
+@@ -121,15 +137,38 @@ def register(body: RegisterRequest, request: Request, conn=Depends(get_conn)):
+     username = body.username.strip()
+     if not USERNAME_RE.match(username):
+         raise HTTPException(status_code=422, detail="Tên đăng nhập chỉ gồm chữ không dấu, số, _ . -")
++    email = _gmail(body.email)
+     if conn.execute("SELECT 1 FROM users WHERE lower(username) = lower(?)", (username,)).fetchone():
+         raise HTTPException(status_code=409, detail="Tên đăng nhập đã tồn tại")
+-    cur = conn.execute("INSERT INTO users(username, password_hash) VALUES (?, ?)",
+-                       (username, hash_password(body.password)))
++    if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
++        raise HTTPException(status_code=409, detail="Email đã được dùng cho tài khoản khác")
++    cur = conn.execute("INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?)",
++                       (username, email, hash_password(body.password)))
+     conn.commit()
+     limiter.hit(key)
+     return _token_for(request, cur.lastrowid)
+ 
+ 
++@router.post("/auth/reset-password")
++def reset_password(body: ResetPasswordRequest, request: Request, conn=Depends(get_conn)):
++    """Quen mat khau: nhap email + mat khau moi, sau do dang nhap lai nhu binh thuong.
++    LUU Y: khong xac minh quyen so huu email (khong gui ma/OTP) -> chi phu hop ban demo."""
++    limiter = request.app.state.reset_limiter
++    key = _client_ip(request)
++    if limiter.blocked(key):
++        raise HTTPException(status_code=429, detail="Đặt lại mật khẩu quá nhiều lần, thử lại sau")
++    limiter.hit(key)
++    email = _gmail(body.email)
++    row = conn.execute("SELECT id, username FROM users WHERE email = ?", (email,)).fetchone()
++    if row is None:
++        raise HTTPException(status_code=404, detail="Không có tài khoản nào dùng email này")
++    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(body.new_password), row["id"]))
++    conn.commit()
++    # Go khoa dang nhap sai (neu co) de dang nhap lai duoc ngay bang mat khau moi.
++    request.app.state.login_limiter.reset(f"{key}|{row['username'].lower()}")
++    return {"username": row["username"]}
++
++
+ @router.get("/me")
+ def me(user: dict = Depends(current_user)):
+     return user
+diff --git a/backend/app/core/db.py b/backend/app/core/db.py
+index f8a694b..9a8bc8d 100644
+--- a/backend/app/core/db.py
++++ b/backend/app/core/db.py
+@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(user_id, session_id)
+ """
+ 
+ 
+-SCHEMA_VERSION = 3
++SCHEMA_VERSION = 4
+ 
+ # v2: phien ban ghi chu (de gop ba chieu) + nhat ky su kien (de dong bo truc tiep).
+ MIGRATION_V2 = """
+@@ -124,6 +124,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
+         conn.execute("ALTER TABLE notes ADD COLUMN file_path TEXT")
+     if "file_name" not in cols:
+         conn.execute("ALTER TABLE notes ADD COLUMN file_name TEXT")
++    # v4: email cua tai khoan (bat buoc khi dang ky, dung de dat lai mat khau).
++    # Tai khoan tao truoc v4 chua co email -> NULL, nen chi muc duy nhat bo qua NULL.
++    if "email" not in _columns(conn, "users"):
++        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
++    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL")
+     conn.executescript(MIGRATION_V2)
+     conn.execute(
+         "CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_client ON notes(user_id, client_id) "
+diff --git a/backend/app/main.py b/backend/app/main.py
+index 6a65281..b2de8a4 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -40,6 +40,7 @@ def create_app(settings: Settings | None = None, *, embedder=None, llm=None, sto
+     app.state.locks = {}
+     app.state.login_limiter = RateLimiter(limit=10, window=300)   # chi dem lan dang nhap SAI
+     app.state.register_limiter = RateLimiter(limit=5, window=3600)
++    app.state.reset_limiter = RateLimiter(limit=5, window=3600)
+     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
+                        allow_methods=["*"], allow_headers=["*"])
+     app.include_router(router)
+diff --git a/backend/scripts/create_user.py b/backend/scripts/create_user.py
+index 231d930..8f198b2 100644
+--- a/backend/scripts/create_user.py
++++ b/backend/scripts/create_user.py
+@@ -1,6 +1,10 @@
+-"""Tao tai khoan: python scripts/create_user.py <username>   (chay tu thu muc backend)"""
++"""Tao tai khoan:  python scripts/create_user.py <username> <email@gmail.com>
++Gan email cho tai khoan cu (tao truoc khi co cot email):
++               python scripts/create_user.py <username> <email@gmail.com> --set-email
++(chay tu thu muc backend)"""
+ import argparse
+ import getpass
++import re
+ import sys
+ from pathlib import Path
+ 
+@@ -15,8 +19,24 @@ from app.core.db import connect, init_db  # noqa: E402
+ def main() -> None:
+     parser = argparse.ArgumentParser()
+     parser.add_argument("username")
++    parser.add_argument("email")
++    parser.add_argument("--set-email", action="store_true", help="chi gan email cho tai khoan da co")
+     args = parser.parse_args()
+ 
++    email = args.email.strip().lower()
++    if not re.match(r"^[a-z0-9]+(\.[a-z0-9]+)*@gmail\.com$", email):
++        sys.exit("Email phai la dia chi Gmail hop le (vd: ten@gmail.com).")
++
++    if args.set_email:
++        conn = connect(get_settings().db_path)
++        init_db(conn)
++        try:
++            n = conn.execute("UPDATE users SET email = ? WHERE username = ?", (email, args.username)).rowcount
++            conn.commit()
++        except Exception as exc:  # noqa: BLE001
++            sys.exit(f"Khong gan duoc email: {exc}")
++        sys.exit(None if n else f"Khong tim thay user '{args.username}'.")
++
+     password = getpass.getpass("Mat khau: ")
+     if len(password) < 6 or password != getpass.getpass("Nhap lai: "):
+         sys.exit("Mat khau qua ngan hoac khong khop.")
+@@ -25,8 +45,8 @@ def main() -> None:
+     init_db(conn)
+     try:
+         conn.execute(
+-            "INSERT INTO users(username, password_hash) VALUES (?, ?)",
+-            (args.username, PasswordHasher().hash(password)),
++            "INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?)",
++            (args.username, email, PasswordHasher().hash(password)),
+         )
+         conn.commit()
+     except Exception as exc:  # noqa: BLE001
+diff --git a/backend/tests/test_api.py b/backend/tests/test_api.py
+index 97a2c74..4f3c396 100644
+--- a/backend/tests/test_api.py
++++ b/backend/tests/test_api.py
+@@ -180,15 +180,15 @@ def test_upload_markdown(client):
+ # ---------------------------------------------------------------- dang ky, cau hinh, file goc
+ def test_config_and_register_flow(client):
+     assert client.get("/api/config").json() == {"allow_registration": True, "invite_required": False}
+-    r = client.post("/api/auth/register", json={"username": "carol", "password": "matkhau-dai"})
++    r = client.post("/api/auth/register", json={"username": "carol", "email": "carol@gmail.com", "password": "matkhau-dai"})
+     assert r.status_code == 201
+     h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+     assert client.get("/api/me", headers=h).json()["username"] == "carol"
+     assert client.post("/api/auth/login", data={"username": "carol", "password": "matkhau-dai"}).status_code == 200
+     # trung ten (khong phan biet hoa thuong), mat khau ngan, ky tu la
+-    assert client.post("/api/auth/register", json={"username": "CAROL", "password": "matkhau-dai"}).status_code == 409
+-    assert client.post("/api/auth/register", json={"username": "dave", "password": "ngan"}).status_code == 422
+-    assert client.post("/api/auth/register", json={"username": "d a v e", "password": "matkhau-dai"}).status_code == 422
++    assert client.post("/api/auth/register", json={"username": "CAROL", "email": "carol@gmail.com", "password": "matkhau-dai"}).status_code == 409
++    assert client.post("/api/auth/register", json={"username": "dave", "email": "dave@gmail.com", "password": "ngan"}).status_code == 422
++    assert client.post("/api/auth/register", json={"username": "d a v e", "email": "dave@gmail.com", "password": "matkhau-dai"}).status_code == 422
+ 
+ 
+ def test_register_disabled_and_invite_code(tmp_path):
+@@ -197,11 +197,11 @@ def test_register_disabled_and_invite_code(tmp_path):
+         return TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores()))
+ 
+     with make(allow_registration=False) as c:
+-        assert c.post("/api/auth/register", json={"username": "eve", "password": "matkhau-dai"}).status_code == 403
++        assert c.post("/api/auth/register", json={"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai"}).status_code == 403
+     with make(invite_code="bi-mat") as c:
+         assert c.get("/api/config").json()["invite_required"] is True
+-        assert c.post("/api/auth/register", json={"username": "eve", "password": "matkhau-dai"}).status_code == 403
+-        ok = c.post("/api/auth/register", json={"username": "eve", "password": "matkhau-dai", "invite_code": "bi-mat"})
++        assert c.post("/api/auth/register", json={"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai"}).status_code == 403
++        ok = c.post("/api/auth/register", json={"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai", "invite_code": "bi-mat"})
+         assert ok.status_code == 201
+ 
+ 
+@@ -234,3 +234,30 @@ def test_list_full_and_pdf_original_is_stored_and_owner_only(client):
+     assert nodes["Bai bao"]["has_file"] is True and nodes["Thuong"]["has_file"] is False
+     assert client.delete(f"/api/notes/{n['id']}", headers=ha).status_code == 204
+     assert client.get(f"/api/notes/{n['id']}/file", headers=ha).status_code == 404
++
++
++def test_register_requires_gmail_and_unique_email(client):
++    reg = lambda **kw: client.post("/api/auth/register", json={"username": "frank", "password": "matkhau-dai", **kw})
++    assert reg().status_code == 422  # thieu email
++    for bad in ("frank@yahoo.com", "frank@gmail.com.vn", "khong-phai-email", ".frank@gmail.com", "fr ank@gmail.com"):
++        assert reg(email=bad).status_code == 422, bad
++    assert reg(email="  Frank.Le@Gmail.com ").status_code == 201
++    dup = client.post("/api/auth/register",
++                      json={"username": "frank2", "email": "frank.le@gmail.com", "password": "matkhau-dai"})
++    assert dup.status_code == 409 and "Email" in dup.json()["detail"]
++
++
++def test_reset_password_flow(client):
++    client.post("/api/auth/register", json={"username": "gina", "email": "gina@gmail.com", "password": "matkhau-cu1"})
++    reset = lambda **kw: client.post("/api/auth/reset-password", json=kw)
++    assert reset(email="gina@yahoo.com", new_password="matkhau-moi1").status_code == 422
++    assert reset(email="khongco@gmail.com", new_password="matkhau-moi1").status_code == 404
++    assert reset(email="gina@gmail.com", new_password="ngan").status_code == 422
++    r = reset(email="GINA@gmail.com", new_password="matkhau-moi1")
++    assert r.status_code == 200 and r.json() == {"username": "gina"}
++    assert client.post("/api/auth/login", data={"username": "gina", "password": "matkhau-cu1"}).status_code == 401
++    assert client.post("/api/auth/login", data={"username": "gina", "password": "matkhau-moi1"}).status_code == 200
++    # qua 5 lan/gio tu cung mot IP thi bi chan
++    assert reset(email="gina@gmail.com", new_password="matkhau-moi2").status_code == 200
++    assert reset(email="gina@gmail.com", new_password="matkhau-moi3").status_code == 200
++    assert reset(email="gina@gmail.com", new_password="matkhau-moi4").status_code == 429
+diff --git a/frontend/src/components/AuthScreen.tsx b/frontend/src/components/AuthScreen.tsx
+index 8d62be3..4843730 100644
+--- a/frontend/src/components/AuthScreen.tsx
++++ b/frontend/src/components/AuthScreen.tsx
+@@ -1,39 +1,59 @@
+ import { useEffect, useState } from "react";
+ import type { FormEvent } from "react";
+-import { getConfig, login, register } from "../lib/api.ts";
++import { getConfig, login, register, resetPassword } from "../lib/api.ts";
+ import type { PublicConfig, Session } from "../lib/api.ts";
+ import { ApiError, NetworkError } from "../lib/types.ts";
+ 
++type Mode = "login" | "register" | "forgot";
++
++// Giống GMAIL_RE ở backend: chữ, số, dấu chấm (không ở đầu/cuối, không liên tiếp) + @gmail.com
++const GMAIL_RE = /^[a-z0-9]+(\.[a-z0-9]+)*@gmail\.com$/;
++
+ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void }) {
+-  const [mode, setMode] = useState<"login" | "register">("login");
++  const [mode, setMode] = useState<Mode>("login");
+   const [cfg, setCfg] = useState<PublicConfig>({ allow_registration: true, invite_required: false });
+   const [username, setUsername] = useState("");
++  const [email, setEmail] = useState("");
+   const [password, setPassword] = useState("");
+   const [confirm, setConfirm] = useState("");
+   const [invite, setInvite] = useState("");
+   const [error, setError] = useState<string | null>(null);
++  const [notice, setNotice] = useState<string | null>(null);
+   const [busy, setBusy] = useState(false);
+ 
+   useEffect(() => {
+     getConfig().then(setCfg).catch(() => undefined);
+   }, []);
+ 
+-  const switchMode = (m: "login" | "register") => {
++  const switchMode = (m: Mode) => {
+     setMode(m);
+     setError(null);
++    setNotice(null);
++    setPassword("");
++    setConfirm("");
+   };
+ 
+   const submit = async (e: FormEvent) => {
+     e.preventDefault();
+     setError(null);
+-    if (mode === "register") {
+-      if (!/^[A-Za-z0-9_.-]{3,32}$/.test(username)) return setError("Tên đăng nhập 3–32 ký tự: chữ, số, _ . -");
++    setNotice(null);
++    const mail = email.trim().toLowerCase();
++    if (mode === "register" && !/^[A-Za-z0-9_.-]{3,32}$/.test(username)) return setError("Tên đăng nhập 3–32 ký tự: chữ, số, _ . -");
++    if (mode !== "login") {
++      if (!GMAIL_RE.test(mail)) return setError("Email phải là địa chỉ Gmail hợp lệ (vd: ten@gmail.com)");
+       if (password.length < 8) return setError("Mật khẩu cần ít nhất 8 ký tự");
+       if (password !== confirm) return setError("Hai mật khẩu không khớp");
+     }
+     setBusy(true);
+     try {
+-      const s = mode === "login" ? await login("", username.trim(), password) : await register("", username.trim(), password, invite.trim());
++      if (mode === "forgot") {
++        const name = await resetPassword("", mail, password);
++        switchMode("login");
++        setUsername(name);
++        setNotice(`Đã đặt lại mật khẩu cho tài khoản "${name}". Hãy đăng nhập bằng mật khẩu mới.`);
++        return;
++      }
++      const s = mode === "login" ? await login("", username.trim(), password) : await register("", username.trim(), mail, password, invite.trim());
+       onLogin(s);
+     } catch (err) {
+       if (err instanceof ApiError) setError(err.detail || "Có lỗi xảy ra");
+@@ -44,40 +64,53 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void
+     }
+   };
+ 
++  const newPw = mode === "forgot" ? "Mật khẩu mới" : "Mật khẩu";
++
+   return (
+     <div className="auth-wrap">
+       <form className="auth-card" onSubmit={submit}>
+         <h1>🧠 Tri thức cá nhân</h1>
+         <p className="muted">Ghi chú Markdown, tự liên kết ngữ nghĩa, hỏi đáp trên chính ghi chú của bạn.</p>
+-        {cfg.allow_registration && (
++        {mode === "forgot" ? (
++          <p><b>Quên mật khẩu</b> <span className="muted small">— nhập email đã đăng ký và mật khẩu mới.</span></p>
++        ) : cfg.allow_registration && (
+           <div className="auth-tabs" role="tablist">
+             <button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>Đăng nhập</button>
+             <button type="button" role="tab" aria-selected={mode === "register"} className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>Đăng ký</button>
+           </div>
+         )}
+-        <label>Tên đăng nhập
+-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
+-        </label>
+-        <label>Mật khẩu
++        {mode !== "forgot" && (
++          <label>Tên đăng nhập
++            <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
++          </label>
++        )}
++        {mode !== "login" && (
++          <label>Email (Gmail)
++            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" placeholder="ten@gmail.com" autoFocus={mode === "forgot"} required />
++          </label>
++        )}
++        <label>{newPw}
+           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} required />
+         </label>
+-        {mode === "register" && (
+-          <>
+-            <label>Nhập lại mật khẩu
+-              <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />
+-            </label>
+-            {cfg.invite_required && (
+-              <label>Mã mời
+-                <input value={invite} onChange={(e) => setInvite(e.target.value)} required />
+-              </label>
+-            )}
+-          </>
++        {mode !== "login" && (
++          <label>Nhập lại {newPw.toLowerCase()}
++            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />
++          </label>
++        )}
++        {mode === "register" && cfg.invite_required && (
++          <label>Mã mời
++            <input value={invite} onChange={(e) => setInvite(e.target.value)} required />
++          </label>
+         )}
++        {notice && <div className="form-ok" role="status">{notice}</div>}
+         {error && <div className="form-error" role="alert">{error}</div>}
+         <button className="primary" type="submit" disabled={busy}>
+-          {busy ? "Đang xử lý…" : mode === "login" ? "Đăng nhập" : "Tạo tài khoản"}
++          {busy ? "Đang xử lý…" : mode === "login" ? "Đăng nhập" : mode === "register" ? "Tạo tài khoản" : "Đặt lại mật khẩu"}
+         </button>
+-        {!cfg.allow_registration && <p className="muted small">Máy chủ đang tắt đăng ký. Hãy nhờ quản trị viên tạo tài khoản.</p>}
++        {mode === "forgot"
++          ? <button type="button" className="link" onClick={() => switchMode("login")}>← Quay lại đăng nhập</button>
++          : <button type="button" className="link" onClick={() => switchMode("forgot")}>Quên mật khẩu?</button>}
++        {!cfg.allow_registration && mode !== "forgot" && <p className="muted small">Máy chủ đang tắt đăng ký. Hãy nhờ quản trị viên tạo tài khoản.</p>}
+       </form>
+     </div>
+   );
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index 1be6f1e..75f0b98 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -95,17 +95,28 @@ export async function login(base: string, username: string, password: string): P
+   return sessionFromToken(base, access_token);
+ }
+ 
+-export async function register(base: string, username: string, password: string, inviteCode?: string): Promise<Session> {
++export async function register(base: string, username: string, email: string, password: string, inviteCode?: string): Promise<Session> {
+   const res = await doFetch(`${base}/api/auth/register`, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+-    body: JSON.stringify({ username, password, invite_code: inviteCode || null }),
++    body: JSON.stringify({ username, email, password, invite_code: inviteCode || null }),
+   });
+   if (!res.ok) throw await readError(res);
+   const { access_token } = (await res.json()) as { access_token: string };
+   return sessionFromToken(base, access_token);
+ }
+ 
++/** Quên mật khẩu: đặt mật khẩu mới theo email. Trả về tên đăng nhập của tài khoản để đăng nhập lại. */
++export async function resetPassword(base: string, email: string, newPassword: string): Promise<string> {
++  const res = await doFetch(`${base}/api/auth/reset-password`, {
++    method: "POST",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify({ email, new_password: newPassword }),
++  });
++  if (!res.ok) throw await readError(res);
++  return ((await res.json()) as { username: string }).username;
++}
++
+ // ---------------------------------------------------------------- SSE
+ export function parseSseBlock(block: string): { event: string; data: string } | null {
+   let event = "message";
+diff --git a/frontend/src/styles.css b/frontend/src/styles.css
+index 556a6b8..627ab04 100644
+--- a/frontend/src/styles.css
++++ b/frontend/src/styles.css
+@@ -48,7 +48,7 @@ button:disabled { opacity: 0.5; cursor: default; }
+ button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+ button.danger { color: var(--danger); }
+ a.btn { display: inline-block; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; color: inherit; text-decoration: none; }
+-input[type="text"], input:not([type]), input[type="password"], input[type="search"], textarea {
++input[type="text"], input:not([type]), input[type="password"], input[type="email"], input[type="search"], textarea {
+   background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%;
+ }
+ input:focus, textarea:focus { outline: 2px solid var(--accent-bg); border-color: var(--accent); }
+@@ -69,6 +69,9 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
+ .auth-tabs { display: flex; gap: 4px; background: var(--bg); padding: 3px; border-radius: 8px; }
+ .auth-tabs button { flex: 1; border: 0; background: transparent; }
+ .auth-tabs button.active { background: var(--accent-bg); color: var(--accent); }
++.form-ok { color: var(--accent); background: var(--accent-bg); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
++button.link { border: 0; background: transparent; padding: 0; color: var(--accent); font-size: 13px; align-self: flex-end; cursor: pointer; }
++button.link:hover { text-decoration: underline; }
+ .form-error { color: var(--danger); background: rgba(229, 87, 95, 0.12); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+ 
+ /* ---------------------------------------------------------------- khung */
+diff --git a/frontend/tests/api.test.ts b/frontend/tests/api.test.ts
+index 8d9d50c..b3efa44 100644
+--- a/frontend/tests/api.test.ts
++++ b/frontend/tests/api.test.ts
+@@ -1,6 +1,6 @@
+ import test from "node:test";
+ import assert from "node:assert/strict";
+-import { HttpApi, login, parseSseBlock, register } from "../src/lib/api.ts";
++import { HttpApi, login, parseSseBlock, register, resetPassword } from "../src/lib/api.ts";
+ import { ApiError, NetworkError } from "../src/lib/types.ts";
+ import type { RemoteEvent } from "../src/lib/types.ts";
+ 
+@@ -52,9 +52,13 @@ test("login and register build a session via /api/me", async () => {
+   const s = await login("", "alice", "pw");
+   assert.deepEqual(s, { token: "T", username: "alice", userId: 9 });
+   assert.equal(calls[0].init.body, "username=alice&password=pw");
+-  const r = await register("", "bob", "matkhau-dai", "ma");
++  const r = await register("", "bob", "bob@gmail.com", "matkhau-dai", "ma");
+   assert.equal(r.token, "T");
+-  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { username: "bob", password: "matkhau-dai", invite_code: "ma" });
++  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { username: "bob", email: "bob@gmail.com", password: "matkhau-dai", invite_code: "ma" });
++  const rc = stub(() => json({ username: "bob" }));
++  assert.equal(await resetPassword("", "bob@gmail.com", "matkhau-moi"), "bob");
++  assert.ok(rc[0].url.endsWith("/api/auth/reset-password"));
++  assert.deepEqual(JSON.parse(String(rc[0].init.body)), { email: "bob@gmail.com", new_password: "matkhau-moi" });
+   stub(() => json({ detail: "Sai tên đăng nhập hoặc mật khẩu" }, 401));
+   await assert.rejects(() => login("", "a", "b"), (e: unknown) => e instanceof ApiError && e.detail.includes("Sai"));
+ });

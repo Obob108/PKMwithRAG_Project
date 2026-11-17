@@ -179,9 +179,9 @@ function FilesPanel(p: LeftProps) {
   return (
     <div className="panel" {...dropProps("root")}>
       <div className="panel-actions">
-        <button onClick={() => p.onNew()} title="Ghi chú mới">✚ Mới</button>
-        <button onClick={() => setEditing("new")} title="Tạo thư mục mới">📁 Thư mục</button>
-        <button onClick={() => p.onUpload()} title="Tải lên .md / .pdf">⬆ Tải lên</button>
+        <button onClick={() => p.onNew()} title="Ghi chú mới">✚ </button>
+        <button onClick={() => setEditing("new")} title="Tạo thư mục mới">📁 </button>
+        <button onClick={() => p.onUpload()} title="Tải lên .md / .pdf">⬆ </button>
         <button onClick={() => setSort(sort === "recent" ? "name" : "recent")} title="Đổi cách sắp xếp">
           {sort === "recent" ? "⏱ Mới nhất" : "A–Z"}
         </button>
