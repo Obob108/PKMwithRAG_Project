@@ -40,6 +40,9 @@ python scripts/sample_links.py --user alice --n 60 --out ../eval/link_sample.csv
 ```
 `sample_links.py` in phân bố cosine giữa các chunk khác ghi chú và ghi file CSV để bạn tự gán nhãn (cột `label`: 1 = thật sự liên quan, 0 = không).
 
+Nhãn ✓ / ✗ bấm trong panel "Liên kết" của ứng dụng cũng là dữ liệu đánh giá: `python scripts/link_precision.py --user alice --out ../eval/link_decisions.csv`
+in precision của gợi ý theo từng ngưỡng τ (chỉ đo được τ ≥ `link_threshold` lúc lập chỉ mục, và theo cặp ghi chú chứ không theo cặp chunk).
+
 ## Đánh giá truy hồi
 Tạo `eval/questions.jsonl` (xem `eval/questions.example.jsonl`), rồi:
 ```

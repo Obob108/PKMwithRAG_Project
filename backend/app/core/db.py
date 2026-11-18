@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(user_id, session_id)
 """
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # v2: phien ban ghi chu (de gop ba chieu) + nhat ky su kien (de dong bo truc tiep).
 MIGRATION_V2 = """
@@ -92,6 +92,25 @@ CREATE TABLE IF NOT EXISTS events (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, id);
+"""
+
+# v5: kiem duyet lien ket goi y. `links.status` la trang thai tung canh (suggested/accepted/rejected),
+# dung khi doc (graph, goi y, truy hoi). Vi canh semantic bi xoa va tao lai moi lan lap chi muc, quyet
+# dinh cua nguoi dung duoc luu ben vung o `link_decisions` theo CAP GHI CHU (note_a < note_b);
+# indexer doc bang nay de gan lai status cho canh moi. Cot `score` = diem cao nhat cua cap luc nguoi
+# dung quyet dinh (dung de tinh precision theo nguong tau).
+MIGRATION_V5_LINKS = """
+CREATE TABLE IF NOT EXISTS link_decisions (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    note_a     INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    note_b     INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    status     TEXT NOT NULL CHECK (status IN ('accepted', 'rejected')),
+    score      REAL,
+    decided_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, note_a, note_b),
+    CHECK (note_a < note_b)
+);
+CREATE INDEX IF NOT EXISTS idx_link_decisions_b ON link_decisions(user_id, note_b);
 """
 
 
@@ -175,6 +194,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "'folder'" not in events_sql:
         conn.commit()
         conn.executescript(MIGRATION_V4_EVENTS)
+    # v5: trang thai canh; wiki-link do nguoi dung tu viet nen coi la da chap nhan.
+    if "status" not in _columns(conn, "links"):
+        conn.execute(
+            "ALTER TABLE links ADD COLUMN status TEXT NOT NULL DEFAULT 'suggested' "
+            "CHECK (status IN ('suggested', 'accepted', 'rejected'))"
+        )
+        conn.execute("UPDATE links SET status = 'accepted' WHERE type = 'wiki'")
+    conn.executescript(MIGRATION_V5_LINKS)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 

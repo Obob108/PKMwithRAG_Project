@@ -130,6 +130,29 @@ def test_related_graph_and_search(client):
     assert hits and hits[0]["title"] == "A"
 
 
+def test_accept_reject_suggested_links(client):
+    h = login(client)
+    a = make_note(client, h, "A", A)
+    b = make_note(client, h, "B", B)
+    url = f"/api/notes/{a['id']}/links/{b['id']}"
+    r = client.put(url, json={"status": "rejected"}, headers=h)
+    assert r.status_code == 200 and r.json()["status"] == "rejected"
+    assert client.get(f"/api/notes/{a['id']}/related", headers=h).json() == []
+    hidden = client.get(f"/api/notes/{a['id']}/related", params={"include_rejected": True}, headers=h).json()
+    assert [x["status"] for x in hidden] == ["rejected"]
+    assert client.get("/api/graph", headers=h).json()["edges"] == []
+    assert client.put(url, json={"status": "accepted"}, headers=h).json()["status"] == "accepted"
+    g = client.get("/api/graph", params={"min_score": 0.99}, headers=h).json()
+    assert len(g["edges"]) == 1 and g["edges"][0]["accepted"] is True
+    d = client.get("/api/links/decisions", headers=h).json()
+    assert len(d["decisions"]) == 1 and d["precision"][0]["accepted"] == 1
+    assert client.put(url, json={"status": "maybe"}, headers=h).status_code == 422
+    c = make_note(client, h, "C", "nau pho bo voi que va hoa hoi")
+    assert client.put(f"/api/notes/{a['id']}/links/{c['id']}", json={"status": "rejected"},
+                      headers=h).status_code == 404
+    assert client.put(url, json={"status": "rejected"}, headers=login(client, "bob")).status_code == 404
+
+
 def test_chat_returns_answer_with_sources(client):
     h = login(client)
     make_note(client, h, "A", A)

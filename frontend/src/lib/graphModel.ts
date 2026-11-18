@@ -12,13 +12,14 @@ export interface GEdge {
   target: number;
   semantic_score: number | null;
   wiki: boolean;
+  accepted?: boolean; // gợi ý ngữ nghĩa đã được người dùng chấp nhận (luôn hiện, như wiki-link)
 }
 export interface GraphData {
   nodes: GNode[];
   edges: GEdge[];
 }
 export interface ViewOptions {
-  minScore: number; // ngưỡng cosine cho cạnh ngữ nghĩa (cạnh wiki luôn hiện)
+  minScore: number; // ngưỡng cosine cho cạnh ngữ nghĩa (cạnh wiki và cạnh đã chấp nhận luôn hiện)
   showOrphans: boolean; // ghi chú không liên kết với ai
   focusId: number | null; // != null: chỉ hiện lân cận của ghi chú này (graph cục bộ)
   depth: number;
@@ -26,7 +27,7 @@ export interface ViewOptions {
 
 /** Áp bộ lọc: chỉ giữ cạnh đủ mạnh, chỉ giữ ghi chú có liên quan (trừ khi bật "mồ côi"), tính lại bậc. */
 export function buildView(data: GraphData, o: ViewOptions): GraphData {
-  let edges = data.edges.filter((e) => e.wiki || (e.semantic_score ?? 0) >= o.minScore);
+  let edges = data.edges.filter((e) => e.wiki || e.accepted || (e.semantic_score ?? 0) >= o.minScore);
   let nodes = data.nodes;
   if (o.focusId !== null && nodes.some((n) => n.id === o.focusId)) {
     const keep = new Set<number>([o.focusId]);

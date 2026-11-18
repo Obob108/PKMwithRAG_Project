@@ -154,3 +154,11 @@ def test_invalid_graph_mode_raises():
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
+
+
+def test_rejected_semantic_edges_are_not_expanded():
+    from app.services import notes
+    conn, stores, emb, ids = _setup([(1, "A", A), (1, "B", B)])
+    notes.set_link_status(conn, 1, ids["A"], ids["B"], "rejected")
+    hits = retrieve(conn, stores.get(1), emb, 1, QUESTION, top_k=1, context_k=5)
+    assert [h.title for h in hits] == ["A"]

@@ -162,6 +162,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     return [...c.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   }, [noteTags]);
 
+  const [linkRev, setLinkRev] = useState(0); // tăng khi người dùng ✓/✗ gợi ý → graph tải lại
   const toastTimer = useRef<number | undefined>(undefined);
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -361,7 +362,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     return { id: t.id, kind: t.kind, title, dirty: !!n && (n.dirty || n.id === null), conflict: !!n?.has_conflict };
   });
   const outline = useMemo(() => (noteForPanels ? extractOutline(noteForPanels.content) : []), [noteForPanels?.content]); // eslint-disable-line react-hooks/exhaustive-deps
-  const graphKey = `${notes.length}:${notes.filter((n) => n.status === "ready").length}:${notes.reduce((s, n) => s + n.base_version, 0)}`;
+  const graphKey = `${linkRev}:${notes.length}:${notes.filter((n) => n.status === "ready").length}:${notes.reduce((s, n) => s + n.base_version, 0)}`;
   const graphOpen = tabs.some((t) => t.kind === "graph");
 
   const toggleMode = useCallback(() => setUi({ mode: ui.mode === "read" ? "edit" : "read" }), [ui.mode, setUi]);
@@ -441,6 +442,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
       tab={ui.rightTab} setTab={(t) => setUi({ rightTab: t })} note={noteForPanels} notes={notes} linkIndex={linkIndex}
       api={api} online={online} keyById={(id) => engine.keyById(id)} onOpenKey={openKey} onOpenId={(id) => void openId(id)}
       onCreateTitle={(t) => newNote(t)} outline={outline}
+      onLinksChanged={() => setLinkRev((r) => r + 1)} onError={flash}
       onJump={(line) => { if (ui.mode === "read") setUi({ mode: "split" }); setJump({ line, nonce: Date.now() }); }}
       chat={{
         messages: chat, busy: chatBusy, useGraph: ui.chatUseGraph, setUseGraph: (b) => setUi({ chatUseGraph: b }),

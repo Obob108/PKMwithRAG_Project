@@ -50,7 +50,7 @@ def _expand_graph(conn, store, user_id: int, q, seeds: dict[int, float], wiki_pe
     # semantic: doc canh theo ca hai chieu (src OR dst)
     rows = conn.execute(
         f"SELECT src_chunk, dst_chunk, score FROM links WHERE user_id = ? AND type = 'semantic' "
-        f"AND (src_chunk IN ({m}) OR dst_chunk IN ({m}))",
+        f"AND status != 'rejected' AND (src_chunk IN ({m}) OR dst_chunk IN ({m}))",
         [user_id, *ids, *ids],
     ).fetchall()
     for r in rows:

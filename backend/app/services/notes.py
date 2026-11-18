@@ -288,12 +288,25 @@ def changes_since(conn, user_id: int, since: int, limit: int = 500) -> list[dict
 
 
 # ---------------------------------------------------------------- lien ket
-def related_notes(conn, user_id: int, note_id: int, limit: int = 10) -> list[dict]:
+class NoLink(Exception):
+    """Hai ghi chu khong co canh semantic nao de chap nhan/bo qua."""
+
+
+LINK_STATUSES = ("suggested", "accepted", "rejected")
+
+
+def related_notes(conn, user_id: int, note_id: int, limit: int = 10, include_rejected: bool = False) -> list[dict]:
+    """Ghi chu lien quan: wiki-link (hai chieu) + goi y semantic kem trang thai kiem duyet.
+
+    `status` cua muc = trang thai phan semantic ('suggested' | 'accepted' | 'rejected'), None neu chi co wiki.
+    Mac dinh bo goi y da bi bo qua (phan wiki cua cung cap ghi chu van giu).
+    """
     _get_row(conn, user_id, note_id)
     rows = conn.execute(
         """
-        SELECT other, type, MAX(score) AS score FROM (
-            SELECT CASE WHEN src_note = :n THEN dst_note ELSE src_note END AS other, type, score
+        SELECT other, type, MAX(score) AS score, MAX(status = 'accepted') AS acc, MAX(status = 'rejected') AS rej
+        FROM (
+            SELECT CASE WHEN src_note = :n THEN dst_note ELSE src_note END AS other, type, score, status
             FROM links WHERE user_id = :u AND (src_note = :n OR dst_note = :n)
         ) WHERE other IS NOT NULL AND other != :n GROUP BY other, type
         """,
@@ -301,37 +314,105 @@ def related_notes(conn, user_id: int, note_id: int, limit: int = 10) -> list[dic
     ).fetchall()
     agg: dict[int, dict] = {}
     for r in rows:
-        e = agg.setdefault(r["other"], {"note_id": r["other"], "semantic_score": None, "wiki": False})
         if r["type"] == "wiki":
-            e["wiki"] = True
-        else:
-            e["semantic_score"] = r["score"]
+            agg.setdefault(r["other"], {"note_id": r["other"], "semantic_score": None, "wiki": False, "status": None})
+            agg[r["other"]]["wiki"] = True
+            continue
+        status = "rejected" if r["rej"] else "accepted" if r["acc"] else "suggested"
+        if status == "rejected" and not include_rejected:
+            continue
+        e = agg.setdefault(r["other"], {"note_id": r["other"], "semantic_score": None, "wiki": False, "status": None})
+        e["semantic_score"], e["status"] = r["score"], status
     if not agg:
         return []
     marks = ",".join("?" * len(agg))
     titles = {r["id"]: r["title"] for r in conn.execute(
         f"SELECT id, title FROM notes WHERE user_id = ? AND id IN ({marks})", [user_id, *agg])}
     out = [dict(e, title=titles[e["note_id"]]) for e in agg.values() if e["note_id"] in titles]
-    out.sort(key=lambda e: (not e["wiki"], -(e["semantic_score"] or 0.0), e["title"]))
+    out.sort(key=lambda e: (not e["wiki"], e["status"] == "rejected", e["status"] != "accepted",
+                            -(e["semantic_score"] or 0.0), e["title"]))
     return out[:limit]
 
 
-def graph(conn, user_id: int, min_score: float = 0.0) -> dict:
-    """Nut = ghi chu; canh = cap ghi chu co lien ket (gop hai chieu va cac chunk)."""
+def set_link_status(conn, user_id: int, note_id: int, other_id: int, status: str) -> dict:
+    """Chap nhan / bo qua / hoan tac ('suggested') goi y lien ket giua hai ghi chu.
+
+    Ap dung cho moi canh semantic giua cap ghi chu (ca hai chieu, moi cap chunk). Quyet dinh duoc luu
+    trong link_decisions de con hieu luc sau khi lap chi muc lai.
+    """
+    if status not in LINK_STATUSES:
+        raise ValueError(status)
+    _get_row(conn, user_id, note_id)
+    _get_row(conn, user_id, other_id)
+    if note_id == other_id:
+        raise NoLink(note_id)
+    a, b = min(note_id, other_id), max(note_id, other_id)
+    pair = ("user_id = ? AND type = 'semantic' AND "
+            "((src_note = ? AND dst_note = ?) OR (src_note = ? AND dst_note = ?))")
+    args = (user_id, a, b, b, a)
+    score = conn.execute(f"SELECT MAX(score) FROM links WHERE {pair}", args).fetchone()[0]
+    if score is None:
+        raise NoLink(other_id)
+    if status == "suggested":
+        conn.execute("DELETE FROM link_decisions WHERE user_id = ? AND note_a = ? AND note_b = ?", (user_id, a, b))
+    else:
+        conn.execute(
+            "INSERT INTO link_decisions(user_id, note_a, note_b, status, score) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, note_a, note_b) DO UPDATE SET "
+            "status = excluded.status, score = excluded.score, decided_at = datetime('now')",
+            (user_id, a, b, status, score),
+        )
+    conn.execute(f"UPDATE links SET status = ? WHERE {pair}", (status, *args))
+    conn.commit()
+    return {"note_id": note_id, "other_id": other_id, "status": status, "score": score}
+
+
+def link_decisions(conn, user_id: int) -> list[dict]:
+    """Moi quyet dinh cua nguoi dung (de xuat / danh gia)."""
     rows = conn.execute(
-        "SELECT src_note, dst_note, type, MAX(score) AS score FROM links "
-        "WHERE user_id = ? AND dst_note IS NOT NULL AND src_note != dst_note "
-        "AND (type = 'wiki' OR score >= ?) GROUP BY src_note, dst_note, type",
+        "SELECT d.note_a, d.note_b, d.status, d.score, d.decided_at, na.title AS title_a, nb.title AS title_b "
+        "FROM link_decisions d JOIN notes na ON na.id = d.note_a JOIN notes nb ON nb.id = d.note_b "
+        "WHERE d.user_id = ? ORDER BY d.score DESC",
+        (user_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def precision_by_threshold(decisions: list[dict], thresholds: list[float]) -> list[dict]:
+    """Precision cua goi y theo nguong tau, dung nhan cua nguoi dung (accepted = dung, rejected = sai).
+
+    Chi danh gia duoc tau >= nguong da dung khi lap chi muc (cap duoi nguong khong bao gio duoc goi y).
+    """
+    out = []
+    for tau in thresholds:
+        kept = [d for d in decisions if d["score"] is not None and d["score"] >= tau]
+        acc = sum(1 for d in kept if d["status"] == "accepted")
+        out.append({"tau": tau, "labeled": len(kept), "accepted": acc, "rejected": len(kept) - acc,
+                    "precision": (acc / len(kept)) if kept else None})
+    return out
+
+
+def graph(conn, user_id: int, min_score: float = 0.0) -> dict:
+    """Nut = ghi chu; canh = cap ghi chu co lien ket (gop hai chieu va cac chunk).
+
+    Canh semantic da bi bo qua khong bao gio hien; canh da chap nhan luon hien (khong phu thuoc min_score).
+    """
+    rows = conn.execute(
+        "SELECT src_note, dst_note, type, MAX(score) AS score, MAX(status = 'accepted') AS acc FROM links "
+        "WHERE user_id = ? AND dst_note IS NOT NULL AND src_note != dst_note AND status != 'rejected' "
+        "AND (type = 'wiki' OR score >= ? OR status = 'accepted') GROUP BY src_note, dst_note, type",
         (user_id, min_score),
     ).fetchall()
     pairs: dict[tuple[int, int], dict] = {}
     for r in rows:
         key = (min(r["src_note"], r["dst_note"]), max(r["src_note"], r["dst_note"]))
-        e = pairs.setdefault(key, {"source": key[0], "target": key[1], "semantic_score": None, "wiki": False})
+        e = pairs.setdefault(key, {"source": key[0], "target": key[1], "semantic_score": None, "wiki": False,
+                                   "accepted": False})
         if r["type"] == "wiki":
             e["wiki"] = True
         else:
             e["semantic_score"] = max(e["semantic_score"] or 0.0, r["score"])
+            e["accepted"] = e["accepted"] or bool(r["acc"])
     degree: dict[int, int] = {}
     for a, b in pairs:
         degree[a] = degree.get(a, 0) + 1

@@ -191,10 +191,11 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
         const b = sim.nodes[sim.index.get(e.target) ?? -1];
         if (!a || !b) continue;
         const touches = sel !== null && (e.source === sel || e.target === sel);
-        const base = touches ? 1 : e.wiki ? 0.75 : 0.25 + 0.35 * clamp(e.semantic_score ?? 0.5, 0, 1);
+        const strong = e.wiki || !!e.accepted; // do người dùng viết hoặc đã xác nhận
+        const base = touches ? 1 : strong ? 0.75 : 0.25 + 0.35 * clamp(e.semantic_score ?? 0.5, 0, 1);
         c.globalAlpha = Math.min(alphaOf(e.source), alphaOf(e.target)) * base;
-        c.strokeStyle = touches || e.wiki ? col.accent : col.edge;
-        c.lineWidth = touches ? 2 : e.wiki ? 1.6 : 1;
+        c.strokeStyle = touches || strong ? col.accent : col.edge;
+        c.lineWidth = touches ? 2 : strong ? 1.6 : 1;
         c.beginPath();
         c.moveTo(tx + a.x * k, ty + a.y * k);
         c.lineTo(tx + b.x * k, ty + b.y * k);
@@ -401,7 +402,7 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
               <button onClick={load} disabled={loading}>{loading ? "Đang tải…" : "Làm mới"}</button>
             </div>
             <div className="muted small">{view.nodes.length} ghi chú · {view.edges.length} liên kết</div>
-            <div className="legend small"><span className="dot md" /> Ghi chú <span className="dot pdf" /> PDF · đường đậm: [[liên kết]], mảnh: ngữ nghĩa</div>
+            <div className="legend small"><span className="dot md" /> Ghi chú <span className="dot pdf" /> PDF · đường đậm: [[liên kết]] hoặc gợi ý đã ✓, mảnh: gợi ý ngữ nghĩa</div>
           </>
         )}
       </div>

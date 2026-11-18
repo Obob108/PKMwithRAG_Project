@@ -23,7 +23,8 @@ dữ liệu gửi tới API Gemini không phải vấn đề.
 
 ## 3. Dữ liệu (xem backend/app/core/db.py)
 users, notes (status: pending/indexing/ready/failed), chunks (id = ID vector FAISS),
-links (type: wiki | semantic; score), messages.
+links (type: wiki | semantic; score; status: suggested | accepted | rejected), link_decisions
+(quyết định ✓/✗ của người dùng theo cặp ghi chú, giữ qua các lần lập chỉ mục lại; lưu kèm điểm lúc quyết định), messages.
 
 ## 4. Pipeline lập chỉ mục (khi lưu/sửa/xóa ghi chú, chạy nền)
 1. Xóa chunk, vector, cạnh cũ của ghi chú.
@@ -59,7 +60,8 @@ Thư mục (một cấp): GET /folders | POST /folders {name} | PATCH /folders/{
   POST /notes và POST /notes/upload (form) nhận folder_id; PUT /notes/{id} nhận folder_id CHỈ khi đổi thư mục
   (null = ra ngoài; thiết bị gửi sau thắng). Chỉ đổi thư mục thì không lập chỉ mục lại, không đổi updated_at.
   Thư mục không tồn tại/của user khác → ghi chú nằm ngoài. Sự kiện loại 'folder' báo danh sách thư mục đổi.
-Liên kết: GET /notes/{id}/related | GET /graph?min_score= (nút: id, title, source, has_file, degree)
+Liên kết: GET /notes/{id}/related?include_rejected= (mỗi mục có status) | PUT /notes/{id}/links/{other_id} {status: accepted|rejected|suggested}
+| GET /links/decisions (danh sách cặp đã gán nhãn + precision theo τ) | GET /graph?min_score= (nút: id, title, source, has_file, degree; cạnh có accepted)
 Hỏi đáp: GET /search?q= | POST /chat {question, use_graph?} (mặc định vector thuần)
 Đồng bộ: GET /sync/changes[?since=] | GET /events (SSE)
 Header X-Device-Id (tùy chọn) để thiết bị nhận ra sự kiện do chính nó gây ra.
@@ -70,7 +72,9 @@ Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện tho
 - Đăng nhập / Đăng ký (có mã mời nếu máy chủ bật).
 - Ribbon (thanh công cụ dọc): bật/tắt sidebar, ghi chú mới, mở nhanh, Graph, tải lên, hỏi đáp, bảng lệnh, đồng bộ, cài đặt.
 - Sidebar trái: Tệp (cây thư mục một cấp: tạo/đổi tên/xóa, kéo thả ghi chú vào/ra thư mục, kéo file từ máy thả vào thư mục để tải lên; sắp xếp, lọc theo thẻ), Tìm kiếm (từ khóa trên máy + tìm ngữ nghĩa qua API), Thẻ.
-- Sidebar phải: Liên kết (backlink, liên kết đi, [[chưa tạo]], ghi chú liên quan tự động kèm điểm), Dàn ý, Hỏi đáp (nguồn bấm được).
+- Sidebar phải: Liên kết (backlink, liên kết đi, [[chưa tạo]], ghi chú liên quan tự động kèm điểm và nút ✓ chấp nhận / ✗ bỏ qua,
+  mục "Đã bỏ qua" có nút hoàn tác), Dàn ý, Hỏi đáp (nguồn bấm được). Gợi ý bị bỏ qua không hiện lại trong gợi ý, graph và không được
+  dùng để mở rộng 1-hop khi truy hồi; gợi ý đã chấp nhận vẽ đậm trong graph và luôn hiện bất kể thanh trượt ngưỡng.
 - Tab: ghi chú, PDF gốc, Graph view. Editor: soạn / xem / chia đôi, thanh định dạng, tự hoàn thành [[, #thẻ, callout, bảng,
   việc cần làm; đổi tên ghi chú tự cập nhật [[liên kết]] ở ghi chú khác. Thanh trạng thái: đồng bộ trực tiếp/ngoại tuyến, số thay đổi chờ,
   trạng thái lập chỉ mục, phiên bản, xung đột, số từ.
@@ -132,6 +136,9 @@ Máy chủ là nguồn sự thật. Mỗi ghi chú có `version` tăng dần; m�
 - [x] Auth + API + đồng bộ + đăng ký + lưu PDF gốc. Schema v3 (file_path, file_name), migration idempotent từ v1/v2. Sandbox: 85 test backend pass, 1 skip (API test cần fastapi, chạy trên máy bạn).
 - [x] Frontend (gói 10): thư viện thuần TS có 60 test pass (merge, engine offline/đồng bộ, api, text, markdown, graphModel); toàn bộ component biên dịch bằng esbuild và render thử bằng react-dom/server. CHƯA chạy trong trình duyệt thật: cần `npm install && npm run dev` và xem bằng mắt.
 - [x] Thư mục (schema v4: bảng folders, notes.folder_id, events thêm loại 'folder'; migration giữ nguyên id sự kiện). Chọn thư mục khi tải lên, ô chọn thư mục trong editor (dùng trên điện thoại vì không kéo thả được). Đổi thư mục dùng được ngoại tuyến (đồng bộ như sửa nội dung); tạo/đổi tên/xóa thư mục cần mạng.
+- [x] Kiểm duyệt gợi ý liên kết (schema v5): links.status + bảng link_decisions, PUT /notes/{id}/links/{other_id}, nút ✓/✗ trong panel
+  Liên kết, scripts/link_precision.py (precision theo τ từ nhãn ✓/✗).
+  LƯU Ý ĐÁNH GIÁ: cạnh bị bỏ qua không còn được mở rộng khi truy hồi, nên số liệu run_eval sau khi bấm ✗ không còn so được trực tiếp với các lần chạy cũ.
 - [ ] Việc còn lại: kiểm thử tay trên trình duyệt + điện thoại, chọn τ (sample_links), chấm tay chất lượng câu trả lời, thêm ghi chú đa chủ đề, deploy VPS (để sau).
 
 Ghi chú thiết kế:

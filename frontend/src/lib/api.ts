@@ -14,11 +14,13 @@ export interface PublicConfig {
   /** Khác null = máy chủ bắt buộc giải hCaptcha khi đăng nhập/đăng ký. */
   hcaptcha_sitekey?: string | null;
 }
+export type LinkStatus = "suggested" | "accepted" | "rejected";
 export interface RelatedItem {
   note_id: number;
   title: string;
   semantic_score: number | null;
   wiki: boolean;
+  status: LinkStatus | null; // trạng thái phần gợi ý ngữ nghĩa; null nếu chỉ có [[wiki-link]]
 }
 export interface ChatSource {
   n: number;
@@ -205,8 +207,12 @@ export class HttpApi implements Api {
   }
 
   // --- tính năng khác
-  related(id: number): Promise<RelatedItem[]> {
-    return this.json("GET", `/api/notes/${id}/related`);
+  related(id: number, includeRejected = false): Promise<RelatedItem[]> {
+    return this.json("GET", `/api/notes/${id}/related${includeRejected ? "?include_rejected=true" : ""}`);
+  }
+  /** Chấp nhận / bỏ qua gợi ý liên kết giữa hai ghi chú; "suggested" = hoàn tác. */
+  setLinkStatus(id: number, otherId: number, status: LinkStatus): Promise<{ status: LinkStatus; score: number }> {
+    return this.json("PUT", `/api/notes/${id}/links/${otherId}`, { json: { status } });
   }
   graph(minScore = 0): Promise<GraphData> {
     return this.json("GET", `/api/graph?min_score=${minScore}`);

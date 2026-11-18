@@ -26,6 +26,12 @@ test("min score drops weak semantic edges (wiki edges always stay) and the nodes
   assert.deepEqual(strict.nodes.map((n) => n.id), [3, 4]);
 });
 
+test("accepted semantic edges stay visible above any min score, like wiki edges", () => {
+  const d: GraphData = { nodes: data.nodes, edges: [{ ...edge(1, 2, 0.66), accepted: true }, edge(2, 3, 0.9)] };
+  const v = buildView(d, { ...base, minScore: 0.95 });
+  assert.deepEqual(v.edges.map((e) => [e.source, e.target]), [[1, 2]]);
+});
+
 test("local graph around a focus note with depth", () => {
   const d1 = buildView(data, { ...base, focusId: 4, depth: 1 });
   assert.deepEqual(d1.nodes.map((n) => n.id).sort(), [3, 4]);

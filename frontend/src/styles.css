@@ -120,6 +120,17 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
 .row:hover { background: var(--bg3); }
 .row.unresolved { color: var(--muted); font-style: italic; }
 .row.outline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.suggestion { gap: 4px; padding: 2px 4px 2px 0; }
+.suggestion-title { flex: 1; min-width: 0; text-align: left; background: transparent; border: 0; padding: 3px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.suggestion.accepted .suggestion-title { color: var(--accent); font-weight: 500; }
+.row.suggestion.rejected .suggestion-title { color: var(--muted); text-decoration: line-through; }
+.link-btn { flex: none; width: 26px; height: 26px; padding: 0; border-radius: 6px; background: transparent; border: 1px solid transparent; color: var(--muted); line-height: 1; }
+.link-btn:hover:not(:disabled) { background: var(--bg3); color: inherit; }
+.link-btn.ok:hover:not(:disabled), .link-btn.ok.on { color: var(--ok); border-color: var(--ok); }
+.link-btn.no:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+.link-btn:disabled { opacity: 0.5; }
+.rejected-list { margin: 6px 0 0; }
+.rejected-list summary { cursor: pointer; padding: 4px 8px; }
 .badge { background: var(--bg3); border-radius: 10px; padding: 0 7px; font-size: 11px; color: var(--muted); }
 .chip-row { padding-bottom: 4px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-bg); color: var(--accent); border-radius: 12px; padding: 2px 4px 2px 10px; }
@@ -319,3 +330,4 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
 @keyframes rise { from { transform: translateY(0); opacity: 0; } 10% { opacity: 1; }
   to { transform: translateY(-110vh) translateX(20px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .fish, .fish-body, .fish-tail, .bubble { animation: none; } }
+@media (pointer: coarse) { .link-btn { width: 34px; height: 34px; } }

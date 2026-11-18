@@ -123,15 +123,24 @@ def _replace_index(conn, store, note, chunks, vectors, link_top_k, link_threshol
         marks = ",".join("?" * len(dst_ids))
         for r in conn.execute(f"SELECT id, note_id FROM chunks WHERE id IN ({marks})", list(dst_ids)):
             note_of[r["id"]] = r["note_id"]
+    # Quyet dinh cua nguoi dung (chap nhan/bo qua) giu nguyen qua cac lan lap chi muc.
+    decided = {
+        (r["note_b"] if r["note_a"] == note_id else r["note_a"]): r["status"]
+        for r in conn.execute(
+            "SELECT note_a, note_b, status FROM link_decisions "
+            "WHERE user_id = ? AND (note_a = ? OR note_b = ?)",
+            (user_id, note_id, note_id),
+        )
+    }
     for src_chunk, hits in zip(new_ids, neighbors):
         for dst_chunk, score in hits:
             dst_note = note_of.get(dst_chunk)
             if dst_note is None or dst_note == note_id:
                 continue
             conn.execute(
-                "INSERT INTO links(user_id, src_note, dst_note, src_chunk, dst_chunk, type, score) "
-                "VALUES (?, ?, ?, ?, ?, 'semantic', ?)",
-                (user_id, note_id, dst_note, src_chunk, dst_chunk, score),
+                "INSERT INTO links(user_id, src_note, dst_note, src_chunk, dst_chunk, type, score, status) "
+                "VALUES (?, ?, ?, ?, ?, 'semantic', ?, ?)",
+                (user_id, note_id, dst_note, src_chunk, dst_chunk, score, decided.get(dst_note, "suggested")),
             )
 
     # 5) Canh wiki [[tieu de]] (dst_note NULL neu chua co ghi chu).
@@ -141,8 +150,8 @@ def _replace_index(conn, store, note, chunks, vectors, link_top_k, link_threshol
             (user_id, title, note_id),
         ).fetchone()
         conn.execute(
-            "INSERT INTO links(user_id, src_note, dst_note, dst_title, type, score) "
-            "VALUES (?, ?, ?, ?, 'wiki', 1.0)",
+            "INSERT INTO links(user_id, src_note, dst_note, dst_title, type, score, status) "
+            "VALUES (?, ?, ?, ?, 'wiki', 1.0, 'accepted')",
             (user_id, note_id, target["id"] if target else None, title),
         )
 

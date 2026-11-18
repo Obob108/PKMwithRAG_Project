@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, ReactNode } from "react";
-import type { ChatSource, HttpApi, RelatedItem, SearchHit } from "../lib/api.ts";
+import type { ChatSource, HttpApi, LinkStatus, RelatedItem, SearchHit } from "../lib/api.ts";
 import { searchNotes } from "../lib/text.ts";
 import type { LinkIndex, OutlineItem } from "../lib/text.ts";
 import type { Folder, LocalNote } from "../lib/types.ts";
@@ -326,6 +326,8 @@ interface RightProps {
   onOpenKey: (key: string) => void;
   onOpenId: (id: number) => void;
   onCreateTitle: (title: string) => void;
+  onLinksChanged: () => void;
+  onError: (msg: string) => void;
   outline: OutlineItem[];
   onJump: (line: number) => void;
   chat: { messages: ChatMsg[]; busy: boolean; useGraph: boolean; setUseGraph: (b: boolean) => void; onAsk: (q: string) => void; onClear: () => void };
@@ -368,11 +370,27 @@ function LinksPanel(p: RightProps) {
       return;
     }
     let cancelled = false;
-    p.api.related(note.id)
+    p.api.related(note.id, true)
       .then((r) => { if (!cancelled) { setItems(r.filter((x) => x.semantic_score !== null)); setFailed(false); } })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
   }, [note?.id, note?.status, note?.base_version, p.online, p.api]);
+
+  const [pending, setPending] = useState<Set<number>>(new Set());
+  // ✓ / ✗ / hoàn tác: cập nhật lạc quan, lỗi thì trả lại trạng thái cũ.
+  const decide = (r: RelatedItem, status: LinkStatus) => {
+    if (!note || note.id === null || pending.has(r.note_id)) return;
+    const noteId = note.id;
+    const prev = r.status;
+    const setStatus = (st: LinkStatus | null) =>
+      setItems((list) => list?.map((x) => (x.note_id === r.note_id ? { ...x, status: st } : x)) ?? list);
+    setStatus(status);
+    setPending((s) => new Set(s).add(r.note_id));
+    p.api.setLinkStatus(noteId, r.note_id, status)
+      .then(() => p.onLinksChanged())
+      .catch(() => { setStatus(prev); p.onError("Không lưu được lựa chọn liên kết. Thử lại sau."); })
+      .finally(() => setPending((s) => { const n = new Set(s); n.delete(r.note_id); return n; }));
+  };
 
   if (!note) return <div className="panel"><div className="muted pad">Mở một ghi chú để xem các liên kết của nó.</div></div>;
 
@@ -387,7 +405,10 @@ function LinksPanel(p: RightProps) {
     : !p.online ? "Cần kết nối để xem gợi ý."
     : failed ? "Không tải được gợi ý."
     : items === null ? "Đang tải…"
-    : items.length === 0 ? "Chưa có ghi chú nào đủ giống." : null;
+    : items.every((r) => r.status === "rejected") ? "Chưa có ghi chú nào đủ giống." : null;
+  const shown = (items ?? []).filter((r) => r.status !== "rejected");
+  const rejected = (items ?? []).filter((r) => r.status === "rejected");
+  const open = (id: number) => { const key = p.keyById(id); if (key) p.onOpenKey(key); else p.onOpenId(id); };
 
   return (
     <div className="panel">
@@ -404,14 +425,36 @@ function LinksPanel(p: RightProps) {
 
       <h4>Gợi ý liên quan (AI)</h4>
       {semanticMsg && <div className="muted pad small">{semanticMsg}</div>}
-      {items?.map((r) => {
-        const key = p.keyById(r.note_id);
+      {shown.map((r) => {
+        const accepted = r.status === "accepted";
+        const busy = pending.has(r.note_id);
         return (
-          <button key={r.note_id} className="row" onClick={() => (key ? p.onOpenKey(key) : p.onOpenId(r.note_id))}>
-            <span>{r.title}</span><span className="badge">{Math.round((r.semantic_score ?? 0) * 100)}%</span>
-          </button>
+          <div key={r.note_id} className={"row suggestion" + (accepted ? " accepted" : "")}>
+            <button className="suggestion-title" onClick={() => open(r.note_id)} title={accepted ? "Liên kết đã xác nhận" : "Gợi ý tự động"}>
+              {r.title}
+            </button>
+            <span className="badge">{Math.round((r.semantic_score ?? 0) * 100)}%</span>
+            <button className={"link-btn ok" + (accepted ? " on" : "")} disabled={busy} aria-pressed={accepted}
+                    title={accepted ? "Bỏ xác nhận (về lại gợi ý)" : "Chấp nhận liên kết"}
+                    onClick={() => decide(r, accepted ? "suggested" : "accepted")}>✓</button>
+            <button className="link-btn no" disabled={busy} title="Bỏ qua: không gợi ý lại cặp này"
+                    onClick={() => decide(r, "rejected")}>✗</button>
+          </div>
         );
       })}
+      {rejected.length > 0 && (
+        <details className="rejected-list">
+          <summary className="muted small">Đã bỏ qua ({rejected.length})</summary>
+          {rejected.map((r) => (
+            <div key={r.note_id} className="row suggestion rejected">
+              <button className="suggestion-title" onClick={() => open(r.note_id)}>{r.title}</button>
+              <span className="badge">{Math.round((r.semantic_score ?? 0) * 100)}%</span>
+              <button className="link-btn" disabled={pending.has(r.note_id)} title="Hoàn tác: hiện lại gợi ý này"
+                      onClick={() => decide(r, "suggested")}>↺</button>
+            </div>
+          ))}
+        </details>
+      )}
     </div>
   );
 }

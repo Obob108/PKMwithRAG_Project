@@ -349,3 +349,115 @@ def test_migration_from_v3_rebuilds_events_and_keeps_ids():
     f = notes.create_folder(conn, 1, "Moi")
     assert notes.changes_since(conn, 1, 3)[0]["id"] == 4 and notes.get_note(conn, 1, 1)["folder_id"] is None
     assert notes.update_note(conn, 1, 1, content="c", base_version=1, folder_id=f["id"])["note"]["folder_id"] == f["id"]
+
+
+# ---------------------------------------------------------------- kiem duyet goi y lien ket
+def _linked_pair(link_threshold=0.3):
+    conn = _conn()
+    stores, emb = FakeStores(), FakeEmbedder(dim=1024)
+    ids = {}
+    for title, text in {"A": "retrieval augmented generation vector search embeddings",
+                        "B": "vector search embeddings faiss index",
+                        "C": "nau pho bo voi que va hoa hoi"}.items():
+        ids[title] = upsert_note(conn, 1, title, text)
+        index_note(conn, stores, emb, ids[title], link_threshold=link_threshold)
+    return conn, stores, emb, ids
+
+
+def _link_statuses(conn):
+    return {r[0] for r in conn.execute("SELECT status FROM links WHERE type = 'semantic'")}
+
+
+def test_new_semantic_links_are_suggested_and_wiki_links_accepted():
+    conn, stores, emb, ids = _linked_pair()
+    assert _link_statuses(conn) == {"suggested"}
+    n = upsert_note(conn, 1, "W", "xem [[A]]")
+    index_note(conn, stores, emb, n)
+    assert conn.execute("SELECT status FROM links WHERE type = 'wiki'").fetchone()[0] == "accepted"
+    rel = notes.related_notes(conn, 1, ids["A"])
+    assert [(r["title"], r["status"]) for r in rel if r["semantic_score"] is not None] == [("B", "suggested")]
+
+
+def test_reject_hides_from_related_and_graph_and_survives_reindex():
+    conn, stores, emb, ids = _linked_pair()
+    # quyet dinh tu phia B (canh luu B -> A): phai ap dung cho ca cap
+    out = notes.set_link_status(conn, 1, ids["A"], ids["B"], "rejected")
+    assert out["status"] == "rejected" and out["score"] >= 0.3
+    assert _link_statuses(conn) == {"rejected"}
+    assert notes.related_notes(conn, 1, ids["A"]) == []
+    assert notes.related_notes(conn, 1, ids["B"]) == []
+    hidden = notes.related_notes(conn, 1, ids["A"], include_rejected=True)
+    assert [(r["title"], r["status"]) for r in hidden] == [("B", "rejected")]
+    assert notes.graph(conn, 1)["edges"] == []
+
+    # sua ca hai ghi chu -> lap chi muc lai -> canh moi van mang trang thai rejected
+    for title, text in (("A", "retrieval augmented generation vector search embeddings moi"),
+                        ("B", "vector search embeddings faiss index moi")):
+        notes.update_note(conn, 1, ids[title], content=text, base_version=notes.get_note(conn, 1, ids[title])["version"])
+        index_note(conn, stores, emb, ids[title], link_threshold=0.3)
+    assert conn.execute("SELECT COUNT(*) FROM links WHERE type = 'semantic'").fetchone()[0] > 0
+    assert _link_statuses(conn) == {"rejected"}
+    assert notes.related_notes(conn, 1, ids["A"]) == []
+
+
+def test_accept_keeps_edge_in_graph_regardless_of_min_score_and_undo_restores():
+    conn, stores, emb, ids = _linked_pair()
+    assert notes.graph(conn, 1, min_score=0.99)["edges"] == []
+    notes.set_link_status(conn, 1, ids["B"], ids["A"], "accepted")
+    e = notes.graph(conn, 1, min_score=0.99)["edges"]
+    assert len(e) == 1 and e[0]["accepted"] is True
+    assert notes.related_notes(conn, 1, ids["A"])[0]["status"] == "accepted"
+    notes.set_link_status(conn, 1, ids["A"], ids["B"], "suggested")
+    assert _link_statuses(conn) == {"suggested"}
+    assert conn.execute("SELECT COUNT(*) FROM link_decisions").fetchone()[0] == 0
+    assert notes.graph(conn, 1)["edges"][0]["accepted"] is False
+
+
+def test_set_link_status_errors_and_isolation():
+    conn, stores, emb, ids = _linked_pair()
+    for args in ((ids["A"], ids["C"]), (ids["A"], ids["A"])):  # khong co canh / cung mot ghi chu
+        try:
+            notes.set_link_status(conn, 1, *args, "rejected")
+            raise AssertionError("expected NoLink")
+        except notes.NoLink:
+            pass
+    try:
+        notes.set_link_status(conn, 2, ids["A"], ids["B"], "rejected")  # user khac
+        raise AssertionError("expected NotFound")
+    except notes.NotFound:
+        pass
+    try:
+        notes.set_link_status(conn, 1, ids["A"], ids["B"], "maybe")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+
+def test_decisions_deleted_with_note_and_precision_by_threshold():
+    conn, stores, emb, ids = _linked_pair()
+    notes.set_link_status(conn, 1, ids["A"], ids["B"], "accepted")
+    d = notes.link_decisions(conn, 1)
+    assert [(r["title_a"], r["title_b"], r["status"]) for r in d] == [("A", "B", "accepted")]
+    p = notes.precision_by_threshold(
+        [{"score": 0.9, "status": "accepted"}, {"score": 0.7, "status": "rejected"},
+         {"score": 0.66, "status": "accepted"}], [0.65, 0.7, 0.95])
+    assert [(r["labeled"], r["precision"]) for r in p] == [(3, 2 / 3), (2, 0.5), (0, None)]
+    delete_note_index(conn, stores, ids["B"])
+    assert conn.execute("SELECT COUNT(*) FROM link_decisions").fetchone()[0] == 0
+
+
+def test_migration_v4_to_v5_adds_link_status():
+    conn = connect(":memory:")
+    init_db(conn)
+    conn.execute("DROP TABLE link_decisions")
+    conn.execute("ALTER TABLE links DROP COLUMN status")
+    conn.execute("PRAGMA user_version = 4")
+    conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x')")
+    conn.execute("INSERT INTO notes(user_id, title, content) VALUES (1, 'A', ''), (1, 'B', '')")
+    conn.execute("INSERT INTO links(user_id, src_note, dst_note, type, score) VALUES (1, 1, 2, 'wiki', 1), "
+                 "(1, 1, 2, 'semantic', 0.8)")
+    conn.commit()
+    init_db(conn)
+    rows = conn.execute("SELECT type, status FROM links ORDER BY type").fetchall()
+    assert [tuple(r) for r in rows] == [("semantic", "suggested"), ("wiki", "accepted")]
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION

@@ -11,6 +11,8 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header, HT
                      Response, UploadFile)
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from typing import Literal
+
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -57,6 +59,11 @@ class RegisterRequest(BaseModel):
 
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+class LinkStatusUpdate(BaseModel):
+    # 'suggested' = hoan tac (bo quyet dinh, quay ve goi y)
+    status: Literal["accepted", "rejected", "suggested"]
 
 
 class ChatRequest(BaseModel):
@@ -275,12 +282,34 @@ def delete_note(note_id: int, request: Request, user: dict = Depends(current_use
 
 
 @router.get("/notes/{note_id}/related")
-def related(note_id: int, limit: int = Query(10, ge=1, le=50),
+def related(note_id: int, limit: int = Query(10, ge=1, le=50), include_rejected: bool = Query(False),
             user: dict = Depends(current_user), conn=Depends(get_conn)):
     try:
-        return notes_svc.related_notes(conn, user["id"], note_id, limit)
+        return notes_svc.related_notes(conn, user["id"], note_id, limit, include_rejected=include_rejected)
     except notes_svc.NotFound:
         raise _not_found()
+
+
+@router.put("/notes/{note_id}/links/{other_id}")
+def set_link_status(note_id: int, other_id: int, body: LinkStatusUpdate,
+                    user: dict = Depends(current_user), conn=Depends(get_conn)):
+    """Chap nhan (accepted), bo qua (rejected) hoac hoan tac (suggested) goi y lien ket giua hai ghi chu."""
+    # Khong can user_lock: indexer doc link_decisions SAU khi da mo giao dich ghi (DELETE links),
+    # nen SQLite tu tuan tu hoa hai ben; khoa nguoi dung se bat request cho ca buoc embedding.
+    try:
+        return notes_svc.set_link_status(conn, user["id"], note_id, other_id, body.status)
+    except notes_svc.NotFound:
+        raise _not_found()
+    except notes_svc.NoLink:
+        raise HTTPException(status_code=404, detail="Hai ghi chú này không có gợi ý liên kết")
+
+
+@router.get("/links/decisions")
+def list_link_decisions(user: dict = Depends(current_user), conn=Depends(get_conn)):
+    """Cac cap da duoc chap nhan/bo qua kem diem, va precision theo nguong tau."""
+    decisions = notes_svc.link_decisions(conn, user["id"])
+    taus = [round(0.5 + 0.05 * i, 2) for i in range(10)]
+    return {"decisions": decisions, "precision": notes_svc.precision_by_threshold(decisions, taus)}
 
 
 @router.get("/graph")
