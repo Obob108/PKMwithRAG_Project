@@ -14,7 +14,7 @@ B = "vector search embeddings faiss index"
 
 @pytest.fixture
 def client(tmp_path):
-    settings = Settings(data_dir=tmp_path, jwt_secret="test-secret", link_threshold=0.3)
+    settings = Settings(_env_file=None, data_dir=tmp_path, jwt_secret="test-secret", link_threshold=0.3)
     app = create_app(settings, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("Trả lời thử [1]."),
                      stores=FakeStores())
     with TestClient(app) as c:
@@ -217,7 +217,7 @@ def test_config_and_register_flow(client):
 
 def test_register_disabled_and_invite_code(tmp_path):
     def make(**kw):
-        s = Settings(data_dir=tmp_path / str(len(kw)), jwt_secret="t", **kw)
+        s = Settings(_env_file=None, data_dir=tmp_path / str(len(kw)), jwt_secret="t", **kw)
         return TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores()))
 
     with make(allow_registration=False) as c:
@@ -270,7 +270,7 @@ def test_hcaptcha_required_for_login_and_register(tmp_path, monkeypatch):
         return token == "ok-token"
 
     monkeypatch.setattr(captcha, "verify_hcaptcha", fake_verify)
-    s = Settings(data_dir=tmp_path, jwt_secret="t", hcaptcha_sitekey="site", hcaptcha_secret="sec")
+    s = Settings(_env_file=None, data_dir=tmp_path, jwt_secret="t", hcaptcha_sitekey="site", hcaptcha_secret="sec")
     with TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores())) as c:
         assert c.get("/api/config").json()["hcaptcha_sitekey"] == "site"
         reg = {"username": "eve", "password": "matkhau-dai"}
