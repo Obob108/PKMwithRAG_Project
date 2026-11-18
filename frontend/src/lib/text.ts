@@ -149,3 +149,33 @@ export function buildLinkIndex(notes: { key: string; title: string; content: str
   }
   return { titleToKey, outgoing, backlinks };
 }
+
+// ---------------------------------------------------------------- giải thích gợi ý liên kết
+const STOP = new Set([
+  "cac", "cua", "cho", "duoc", "nhung", "mot", "nay", "voi", "khong", "trong", "hoac", "neu", "thi", "nhu", "khi",
+  "con", "rat", "the", "and", "for", "with", "from", "that", "this", "are", "not", "can", "has", "have", "its",
+]);
+const TERM_RE = /[\p{L}\p{N}_]+/gu;
+
+/** Từ (đã bỏ dấu, chữ thường) xuất hiện ở cả hai đoạn, bỏ từ quá ngắn và từ phổ biến. */
+export function sharedTerms(a: string, b: string): Set<string> {
+  const terms = (s: string) => new Set((fold(s).match(TERM_RE) ?? []).filter((w) => w.length >= 3 && !STOP.has(w)));
+  const tb = terms(b);
+  return new Set([...terms(a)].filter((w) => tb.has(w)));
+}
+
+/** Tách văn bản thành các mảnh, đánh dấu mảnh là từ chung (để tô sáng). Giữ nguyên chữ gốc có dấu. */
+export function highlightParts(text: string, terms: Set<string>): { text: string; hit: boolean }[] {
+  if (terms.size === 0) return [{ text, hit: false }];
+  const out: { text: string; hit: boolean }[] = [];
+  let last = 0;
+  for (const m of text.matchAll(TERM_RE)) {
+    if (!terms.has(fold(m[0]))) continue;
+    const i = m.index ?? 0;
+    if (i > last) out.push({ text: text.slice(last, i), hit: false });
+    out.push({ text: m[0], hit: true });
+    last = i + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), hit: false });
+  return out;
+}

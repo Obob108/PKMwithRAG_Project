@@ -22,6 +22,20 @@ export interface RelatedItem {
   wiki: boolean;
   status: LinkStatus | null; // trạng thái phần gợi ý ngữ nghĩa; null nếu chỉ có [[wiki-link]]
 }
+export interface ExplainSide {
+  chunk_id: number;
+  heading: string;
+  text: string;
+}
+export interface LinkExplanation {
+  note_id: number;
+  other_id: number;
+  other_title: string;
+  score: number; // cosine cao nhất giữa hai ghi chú
+  n_pairs: number; // tổng số cặp đoạn vượt ngưỡng
+  status: LinkStatus;
+  pairs: { score: number; this: ExplainSide; other: ExplainSide }[];
+}
 export interface ChatSource {
   n: number;
   note_id: number;
@@ -209,6 +223,10 @@ export class HttpApi implements Api {
   // --- tính năng khác
   related(id: number, includeRejected = false): Promise<RelatedItem[]> {
     return this.json("GET", `/api/notes/${id}/related${includeRejected ? "?include_rejected=true" : ""}`);
+  }
+  /** Vì sao hai ghi chú được gợi ý: các cặp đoạn giống nhau nhất kèm điểm cosine. */
+  explainLink(id: number, otherId: number, limit = 3): Promise<LinkExplanation> {
+    return this.json("GET", `/api/notes/${id}/links/${otherId}/explain?limit=${limit}`);
   }
   /** Chấp nhận / bỏ qua gợi ý liên kết giữa hai ghi chú; "suggested" = hoàn tác. */
   setLinkStatus(id: number, otherId: number, status: LinkStatus): Promise<{ status: LinkStatus; score: number }> {

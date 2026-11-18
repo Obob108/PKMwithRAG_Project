@@ -61,6 +61,7 @@ Thư mục (một cấp): GET /folders | POST /folders {name} | PATCH /folders/{
   (null = ra ngoài; thiết bị gửi sau thắng). Chỉ đổi thư mục thì không lập chỉ mục lại, không đổi updated_at.
   Thư mục không tồn tại/của user khác → ghi chú nằm ngoài. Sự kiện loại 'folder' báo danh sách thư mục đổi.
 Liên kết: GET /notes/{id}/related?include_rejected= (mỗi mục có status) | PUT /notes/{id}/links/{other_id} {status: accepted|rejected|suggested}
+| GET /notes/{id}/links/{other_id}/explain?limit=3 (lý do gợi ý: các cặp chunk giống nhất kèm cosine, lấy từ bảng links, không embed lại)
 | GET /links/decisions (danh sách cặp đã gán nhãn + precision theo τ) | GET /graph?min_score= (nút: id, title, source, has_file, degree; cạnh có accepted)
 Hỏi đáp: GET /search?q= | POST /chat {question, use_graph?} (mặc định vector thuần)
 Đồng bộ: GET /sync/changes[?since=] | GET /events (SSE)
@@ -73,7 +74,8 @@ Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện tho
 - Ribbon (thanh công cụ dọc): bật/tắt sidebar, ghi chú mới, mở nhanh, Graph, tải lên, hỏi đáp, bảng lệnh, đồng bộ, cài đặt.
 - Sidebar trái: Tệp (cây thư mục một cấp: tạo/đổi tên/xóa, kéo thả ghi chú vào/ra thư mục, kéo file từ máy thả vào thư mục để tải lên; sắp xếp, lọc theo thẻ), Tìm kiếm (từ khóa trên máy + tìm ngữ nghĩa qua API), Thẻ.
 - Sidebar phải: Liên kết (backlink, liên kết đi, [[chưa tạo]], ghi chú liên quan tự động kèm điểm và nút ✓ chấp nhận / ✗ bỏ qua,
-  mục "Đã bỏ qua" có nút hoàn tác), Dàn ý, Hỏi đáp (nguồn bấm được). Gợi ý bị bỏ qua không hiện lại trong gợi ý, graph và không được
+  mục "Đã bỏ qua" có nút hoàn tác; di chuột vào gợi ý hoặc bấm ô % để xem lý do: tối đa 3 cặp đoạn giống nhất kèm cosine,
+  tô màu từ chung), Dàn ý, Hỏi đáp (nguồn bấm được). Gợi ý bị bỏ qua không hiện lại trong gợi ý, graph và không được
   dùng để mở rộng 1-hop khi truy hồi; gợi ý đã chấp nhận vẽ đậm trong graph và luôn hiện bất kể thanh trượt ngưỡng.
 - Tab: ghi chú, PDF gốc, Graph view. Editor: soạn / xem / chia đôi, thanh định dạng, tự hoàn thành [[, #thẻ, callout, bảng,
   việc cần làm; đổi tên ghi chú tự cập nhật [[liên kết]] ở ghi chú khác. Thanh trạng thái: đồng bộ trực tiếp/ngoại tuyến, số thay đổi chờ,

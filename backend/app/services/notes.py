@@ -367,6 +367,51 @@ def set_link_status(conn, user_id: int, note_id: int, other_id: int, status: str
     return {"note_id": note_id, "other_id": other_id, "status": status, "score": score}
 
 
+def explain_link(conn, user_id: int, note_id: int, other_id: int, limit: int = 3,
+                 max_chars: int = 400) -> dict:
+    """Ly do goi y: cac cap chunk giong nhau nhat giua hai ghi chu kem diem cosine.
+
+    Dung lai diem da luu trong bang links luc lap chi muc (khong embed lai). Moi canh semantic la mot cap
+    chunk vuot nguong, nen cap co diem cao nhat chinh la ly do cap ghi chu duoc goi y.
+    Chunk cua `note_id` luon nam o ve 'this', chunk cua `other_id` o ve 'other'.
+    """
+    _get_row(conn, user_id, note_id)
+    other = _get_row(conn, user_id, other_id)
+    rows = conn.execute(
+        "SELECT l.src_note, l.src_chunk, l.dst_chunk, l.score, l.status, "
+        "cs.heading AS s_heading, cs.text AS s_text, cd.heading AS d_heading, cd.text AS d_text "
+        "FROM links l JOIN chunks cs ON cs.id = l.src_chunk JOIN chunks cd ON cd.id = l.dst_chunk "
+        "WHERE l.user_id = ? AND l.type = 'semantic' "
+        "AND ((l.src_note = ? AND l.dst_note = ?) OR (l.src_note = ? AND l.dst_note = ?)) "
+        "ORDER BY l.score DESC",
+        (user_id, note_id, other_id, other_id, note_id),
+    ).fetchall()
+    if note_id == other_id or not rows:
+        raise NoLink(other_id)
+
+    def side(chunk_id, heading, text):
+        text = " ".join(text.split())
+        return {"chunk_id": chunk_id, "heading": heading,
+                "text": text if len(text) <= max_chars else text[:max_chars].rstrip() + "…"}
+
+    pairs, seen = [], set()
+    for r in rows:
+        mine_is_src = r["src_note"] == note_id
+        key = (r["src_chunk"], r["dst_chunk"]) if mine_is_src else (r["dst_chunk"], r["src_chunk"])
+        if key in seen:  # cung cap chunk luu o ca hai chieu
+            continue
+        seen.add(key)
+        src = side(r["src_chunk"], r["s_heading"], r["s_text"])
+        dst = side(r["dst_chunk"], r["d_heading"], r["d_text"])
+        pairs.append({"score": r["score"], "this": src if mine_is_src else dst, "other": dst if mine_is_src else src})
+        if len(pairs) >= limit:
+            break
+    status = "rejected" if any(r["status"] == "rejected" for r in rows) else \
+        "accepted" if any(r["status"] == "accepted" for r in rows) else "suggested"
+    return {"note_id": note_id, "other_id": other_id, "other_title": other["title"], "score": rows[0]["score"],
+            "n_pairs": len({(r["src_chunk"], r["dst_chunk"]) for r in rows}), "status": status, "pairs": pairs}
+
+
 def link_decisions(conn, user_id: int) -> list[dict]:
     """Moi quyet dinh cua nguoi dung (de xuat / danh gia)."""
     rows = conn.execute(

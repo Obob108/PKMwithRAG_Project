@@ -304,6 +304,18 @@ def set_link_status(note_id: int, other_id: int, body: LinkStatusUpdate,
         raise HTTPException(status_code=404, detail="Hai ghi chú này không có gợi ý liên kết")
 
 
+@router.get("/notes/{note_id}/links/{other_id}/explain")
+def explain_link(note_id: int, other_id: int, limit: int = Query(3, ge=1, le=10),
+                 user: dict = Depends(current_user), conn=Depends(get_conn)):
+    """Vi sao hai ghi chu duoc goi y: cac cap doan giong nhau nhat kem diem cosine."""
+    try:
+        return notes_svc.explain_link(conn, user["id"], note_id, other_id, limit)
+    except notes_svc.NotFound:
+        raise _not_found()
+    except notes_svc.NoLink:
+        raise HTTPException(status_code=404, detail="Hai ghi chú này không có gợi ý liên kết")
+
+
 @router.get("/links/decisions")
 def list_link_decisions(user: dict = Depends(current_user), conn=Depends(get_conn)):
     """Cac cap da duoc chap nhan/bo qua kem diem, va precision theo nguong tau."""

@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildLinkIndex, extractOutline, extractTags, extractWikiLinks, fold, fuzzyFilter, fuzzyScore, searchNotes, wordCount,
+  buildLinkIndex, extractOutline, extractTags, extractWikiLinks, fold, fuzzyFilter, fuzzyScore, highlightParts, searchNotes,
+  sharedTerms, wordCount,
 } from "../src/lib/text.ts";
 
 test("fold removes Vietnamese diacritics", () => {
@@ -55,4 +56,13 @@ test("link index: resolved, unresolved, backlinks, case/diacritic-insensitive ti
   assert.deepEqual(idx.backlinks.get("b"), ["a"]);
   assert.deepEqual(idx.backlinks.get("a"), ["b"]);
   assert.equal(idx.backlinks.get("b")?.includes("b"), false); // tự liên kết không tính
+});
+
+test("shared terms ignore accents, case, short and common words; highlight keeps original text", () => {
+  const t = sharedTerms("Chia tài liệu thành Chunk, lưu chunk_index và embedding", "mỗi chunk có chunk_index, embedding của tài liệu");
+  assert.deepEqual([...t].sort(), ["chunk", "chunk_index", "embedding", "lieu", "tai"]);
+  const parts = highlightParts("Tài liệu và Chunk", t);
+  assert.deepEqual(parts.filter((p) => p.hit).map((p) => p.text), ["Tài", "liệu", "Chunk"]);
+  assert.equal(parts.map((p) => p.text).join(""), "Tài liệu và Chunk");
+  assert.deepEqual(highlightParts("abc", new Set()), [{ text: "abc", hit: false }]);
 });

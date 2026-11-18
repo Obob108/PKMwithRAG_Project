@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, ReactNode } from "react";
-import type { ChatSource, HttpApi, LinkStatus, RelatedItem, SearchHit } from "../lib/api.ts";
-import { searchNotes } from "../lib/text.ts";
+import type { ChatSource, ExplainSide, HttpApi, LinkExplanation, LinkStatus, RelatedItem, SearchHit } from "../lib/api.ts";
+import { highlightParts, searchNotes, sharedTerms } from "../lib/text.ts";
 import type { LinkIndex, OutlineItem } from "../lib/text.ts";
 import type { Folder, LocalNote } from "../lib/types.ts";
 import type { LeftTab, RightTab } from "../lib/ui.ts";
@@ -392,6 +392,39 @@ function LinksPanel(p: RightProps) {
       .finally(() => setPending((s) => { const n = new Set(s); n.delete(r.note_id); return n; }));
   };
 
+  // Lý do gợi ý: di chuột vào một gợi ý (sau 350 ms) hoặc bấm vào ô % (ghim lại; dùng được trên điện thoại).
+  const [explainId, setExplainId] = useState<number | null>(null);
+  const [pinned, setPinned] = useState(false);
+  const [explains, setExplains] = useState<Map<string, LinkExplanation | "error">>(new Map());
+  const hoverTimer = useRef<number | undefined>(undefined);
+  useEffect(() => { setExplainId(null); setPinned(false); }, [note?.id]);
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
+  const explainKey = (otherId: number) => `${note?.id}:${otherId}:${note?.base_version}`; // nội dung đổi -> đoạn đổi
+  const loadExplain = (otherId: number) => {
+    if (!note || note.id === null) return;
+    const key = explainKey(otherId);
+    if (explains.has(key)) return;
+    p.api.explainLink(note.id, otherId)
+      .then((e) => setExplains((m) => new Map(m).set(key, e)))
+      .catch(() => setExplains((m) => new Map(m).set(key, "error")));
+  };
+  const hoverIn = (otherId: number) => {
+    if (pinned) return;
+    window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => { setExplainId(otherId); loadExplain(otherId); }, 350);
+  };
+  const hoverOut = () => {
+    window.clearTimeout(hoverTimer.current);
+    if (!pinned) setExplainId(null);
+  };
+  const togglePin = (otherId: number) => {
+    window.clearTimeout(hoverTimer.current);
+    if (pinned && explainId === otherId) { setPinned(false); setExplainId(null); return; }
+    setPinned(true);
+    setExplainId(otherId);
+    loadExplain(otherId);
+  };
+
   if (!note) return <div className="panel"><div className="muted pad">Mở một ghi chú để xem các liên kết của nó.</div></div>;
 
   const back = (p.linkIndex.backlinks.get(note.key) ?? []).map((k) => byKey.get(k)).filter((x): x is LocalNote => !!x);
@@ -409,6 +442,21 @@ function LinksPanel(p: RightProps) {
   const shown = (items ?? []).filter((r) => r.status !== "rejected");
   const rejected = (items ?? []).filter((r) => r.status === "rejected");
   const open = (id: number) => { const key = p.keyById(id); if (key) p.onOpenKey(key); else p.onOpenId(id); };
+
+  const scoreBadge = (r: RelatedItem) => (
+    <button className={"badge badge-btn" + (explainId === r.note_id && pinned ? " on" : "")} aria-expanded={explainId === r.note_id}
+            title="Vì sao gợi ý? (bấm để ghim)" onClick={() => togglePin(r.note_id)}>
+      {Math.round((r.semantic_score ?? 0) * 100)}%
+    </button>
+  );
+  const withExplain = (r: RelatedItem, row: ReactNode) => (
+    <div key={r.note_id} className="suggestion-wrap"
+         onPointerEnter={(e) => { if (e.pointerType === "mouse") hoverIn(r.note_id); }}
+         onPointerLeave={(e) => { if (e.pointerType === "mouse") hoverOut(); }}>
+      {row}
+      {explainId === r.note_id && <ExplainBox data={explains.get(explainKey(r.note_id))} thisTitle={note.title} />}
+    </div>
+  );
 
   return (
     <div className="panel">
@@ -429,32 +477,70 @@ function LinksPanel(p: RightProps) {
         const accepted = r.status === "accepted";
         const busy = pending.has(r.note_id);
         return (
-          <div key={r.note_id} className={"row suggestion" + (accepted ? " accepted" : "")}>
+          withExplain(r, <div className={"row suggestion" + (accepted ? " accepted" : "")}>
             <button className="suggestion-title" onClick={() => open(r.note_id)} title={accepted ? "Liên kết đã xác nhận" : "Gợi ý tự động"}>
               {r.title}
             </button>
-            <span className="badge">{Math.round((r.semantic_score ?? 0) * 100)}%</span>
+            {scoreBadge(r)}
             <button className={"link-btn ok" + (accepted ? " on" : "")} disabled={busy} aria-pressed={accepted}
                     title={accepted ? "Bỏ xác nhận (về lại gợi ý)" : "Chấp nhận liên kết"}
                     onClick={() => decide(r, accepted ? "suggested" : "accepted")}>✓</button>
             <button className="link-btn no" disabled={busy} title="Bỏ qua: không gợi ý lại cặp này"
                     onClick={() => decide(r, "rejected")}>✗</button>
-          </div>
+          </div>)
         );
       })}
       {rejected.length > 0 && (
         <details className="rejected-list">
           <summary className="muted small">Đã bỏ qua ({rejected.length})</summary>
-          {rejected.map((r) => (
-            <div key={r.note_id} className="row suggestion rejected">
+          {rejected.map((r) => withExplain(r,
+            <div className="row suggestion rejected">
               <button className="suggestion-title" onClick={() => open(r.note_id)}>{r.title}</button>
-              <span className="badge">{Math.round((r.semantic_score ?? 0) * 100)}%</span>
+              {scoreBadge(r)}
               <button className="link-btn" disabled={pending.has(r.note_id)} title="Hoàn tác: hiện lại gợi ý này"
                       onClick={() => decide(r, "suggested")}>↺</button>
             </div>
           ))}
         </details>
       )}
+    </div>
+  );
+}
+
+function ExplainBox({ data, thisTitle }: { data: LinkExplanation | "error" | undefined; thisTitle: string }) {
+  if (data === undefined) return <div className="explain muted small">Đang tải lý do gợi ý…</div>;
+  if (data === "error") return <div className="explain muted small">Không tải được lý do gợi ý.</div>;
+  const more = data.n_pairs > data.pairs.length;
+  return (
+    <div className="explain" role="note">
+      <div className="explain-head small">
+        Vì sao gợi ý: {data.n_pairs} cặp đoạn giống nhau{more ? `, đây là ${data.pairs.length} cặp giống nhất` : ""}
+      </div>
+      {data.pairs.map((pr) => {
+        const terms = sharedTerms(pr.this.text, pr.other.text);
+        return (
+          <div key={`${pr.this.chunk_id}-${pr.other.chunk_id}`} className="explain-pair">
+            <div className="explain-score" title="Độ tương đồng cosine giữa embedding của hai đoạn">cosine {pr.score.toFixed(2)}</div>
+            <ExplainSideView label={thisTitle} side={pr.this} terms={terms} />
+            <ExplainSideView label={data.other_title} side={pr.other} terms={terms} />
+          </div>
+        );
+      })}
+      <div className="muted small">Chữ tô màu: từ có ở cả hai đoạn. Cosine đo độ giống về nghĩa, nên hai đoạn vẫn có thể giống nhau khi ít trùng từ.</div>
+    </div>
+  );
+}
+
+function ExplainSideView({ label, side, terms }: { label: string; side: ExplainSide; terms: Set<string> }) {
+  const section = side.heading.split(" > ").pop() ?? "";
+  return (
+    <div className="explain-side">
+      <div className="explain-where small" title={side.heading ? `${label} › ${side.heading}` : label}>
+        {label}{section ? ` › ${section}` : ""}
+      </div>
+      <div className="explain-text">
+        {highlightParts(side.text, terms).map((part, i) => (part.hit ? <mark key={i}>{part.text}</mark> : part.text))}
+      </div>
     </div>
   );
 }

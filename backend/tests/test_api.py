@@ -144,6 +144,9 @@ def test_accept_reject_suggested_links(client):
     assert client.put(url, json={"status": "accepted"}, headers=h).json()["status"] == "accepted"
     g = client.get("/api/graph", params={"min_score": 0.99}, headers=h).json()
     assert len(g["edges"]) == 1 and g["edges"][0]["accepted"] is True
+    ex = client.get(f"/api/notes/{a['id']}/links/{b['id']}/explain", headers=h).json()
+    assert ex["other_title"] == "B" and ex["pairs"] and ex["pairs"][0]["score"] == ex["score"]
+    assert client.get(f"/api/notes/{a['id']}/links/{b['id']}/explain", headers=login(client, "bob")).status_code == 404
     d = client.get("/api/links/decisions", headers=h).json()
     assert len(d["decisions"]) == 1 and d["precision"][0]["accepted"] == 1
     assert client.put(url, json={"status": "maybe"}, headers=h).status_code == 422

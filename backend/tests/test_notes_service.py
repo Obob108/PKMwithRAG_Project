@@ -461,3 +461,32 @@ def test_migration_v4_to_v5_adds_link_status():
     rows = conn.execute("SELECT type, status FROM links ORDER BY type").fetchall()
     assert [tuple(r) for r in rows] == [("semantic", "suggested"), ("wiki", "accepted")]
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_explain_link_returns_best_chunk_pairs_oriented_to_caller():
+    conn = _conn()
+    stores, emb = FakeStores(), FakeEmbedder(dim=1024)
+    a = upsert_note(conn, 1, "A", "# RAG\nretrieval augmented generation vector search embeddings\n\n"
+                                  "# Pho\nnau pho bo voi que va hoa hoi")
+    b = upsert_note(conn, 1, "B", "# Index\nvector search embeddings faiss index")
+    c = upsert_note(conn, 1, "C", "mot ghi chu khong lien quan gi ca")
+    for n in (a, b, c):
+        index_note(conn, stores, emb, n, link_threshold=0.3)
+    ex = notes.explain_link(conn, 1, a, b)
+    assert ex["other_title"] == "B" and ex["status"] == "suggested" and ex["n_pairs"] >= 1
+    top = ex["pairs"][0]
+    assert top["this"]["heading"].endswith("RAG") and top["other"]["heading"].endswith("Index")
+    assert "vector search" in top["this"]["text"] and top["score"] == ex["score"] >= 0.3
+    assert [p["score"] for p in ex["pairs"]] == sorted((p["score"] for p in ex["pairs"]), reverse=True)
+    back = notes.explain_link(conn, 1, b, a)  # goi tu phia B: ve 'this' la chunk cua B
+    assert back["pairs"][0]["this"]["heading"].endswith("Index") and back["score"] == ex["score"]
+    short = notes.explain_link(conn, 1, a, b, max_chars=10)
+    assert short["pairs"][0]["this"]["text"].endswith("…") and len(short["pairs"][0]["this"]["text"]) <= 11
+    for fn, exc in ((lambda: notes.explain_link(conn, 1, a, c), notes.NoLink),
+                    (lambda: notes.explain_link(conn, 1, a, a), notes.NoLink),
+                    (lambda: notes.explain_link(conn, 2, a, b), notes.NotFound)):
+        try:
+            fn()
+            raise AssertionError("expected " + exc.__name__)
+        except exc:
+            pass
