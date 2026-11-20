@@ -71,7 +71,13 @@ Mọi truy vấn lọc theo user_id lấy từ token; file PDF upload lưu theo 
 ## 7. Giao diện (frontend/, React + Vite + TypeScript)
 Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện thoại:
 - Đăng nhập / Đăng ký (có mã mời nếu máy chủ bật).
-- Ribbon (thanh công cụ dọc): bật/tắt sidebar, ghi chú mới, mở nhanh, Graph, tải lên, hỏi đáp, bảng lệnh, đồng bộ, cài đặt.
+- Hàng công cụ ngang ở đầu thanh bên trái: ghi chú mới, mở nhanh, Graph, tải lên, hỏi đáp | bảng lệnh, đồng bộ, cài đặt.
+  Thanh tab: nút ☰ bật/tắt thanh bên trái (khi đóng thì hiện công cụ rút gọn cạnh ☰), ▤ bật/tắt thanh bên phải, và chip người dùng
+  (avatar chữ cái đầu, màu cố định theo tên + chấm trạng thái đồng bộ + tên đăng nhập) mở menu: cài đặt, đồng bộ, sáng/tối, đăng xuất.
+- Trang chủ (khi chưa mở tab nào) phong cách lo-fi / cottagecore cho ấm áp: minh họa SVG tự vẽ (cửa sổ, rèm, dây đèn, cây, sách,
+  tách trà bốc hơi), sáng = buổi sáng nắng ấm, tối = đêm lo-fi có trăng sao; lời chào theo giờ + tên người dùng, ngày tháng,
+  số ghi chú/thư mục/thẻ, các thao tác chính, 5 ghi chú gần đây (giấy vở), “mẩu nhỏ hôm nay” đổi theo ngày. Tôn trọng
+  prefers-reduced-motion.
 - Sidebar trái: Tệp (cây thư mục một cấp: tạo/đổi tên/xóa, kéo thả ghi chú vào/ra thư mục, kéo file từ máy thả vào thư mục để tải lên; sắp xếp, lọc theo thẻ), Tìm kiếm (từ khóa trên máy + tìm ngữ nghĩa qua API), Thẻ.
 - Sidebar phải: Liên kết (backlink, liên kết đi, [[chưa tạo]], ghi chú liên quan tự động kèm điểm và nút ✓ chấp nhận / ✗ bỏ qua,
   mục "Đã bỏ qua" có nút hoàn tác; di chuột vào gợi ý hoặc bấm ô % để xem lý do: tối đa 3 cặp đoạn giống nhất kèm cosine,

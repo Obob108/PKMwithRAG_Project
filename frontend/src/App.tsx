@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PointerEvent as RPointerEvent, ReactNode } from "react";
 import AuthScreen from "./components/AuthScreen.tsx";
-import { Ribbon, StatusBar, TabBar } from "./components/Chrome.tsx";
+import { StatusBar, TabBar, Toolbar, UserMenu } from "./components/Chrome.tsx";
+import Home from "./components/Home.tsx";
 import type { TabView } from "./components/Chrome.tsx";
 import EditorPane from "./components/EditorPane.tsx";
 import GraphView from "./components/GraphView.tsx";
@@ -451,18 +452,34 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     />
   );
 
+  const logoutChecked = () => {
+    if (engine.pendingCount() === 0 || confirm("Còn thay đổi chưa đồng bộ trên thiết bị này. Vẫn đăng xuất?")) onLogout();
+  };
+  const quickTools = !narrow && (
+    <div className="quick-tools">
+      <button className="tool-btn" title="Ghi chú mới (Ctrl+N)" aria-label="Ghi chú mới" onClick={() => newNote()}>✚</button>
+      <button className="tool-btn" title="Mở nhanh (Ctrl+O)" aria-label="Mở nhanh" onClick={() => setDialog("switcher")}>🔎</button>
+      <button className={"tool-btn" + (active?.kind === "graph" ? " active" : "")} title="Graph view (Ctrl+G)" aria-label="Graph view" onClick={openGraph}>🕸</button>
+      <button className="tool-btn" title="Hỏi đáp trên ghi chú" aria-label="Hỏi đáp" onClick={openChat}>💬</button>
+    </div>
+  );
+
   return (
     <div className={"app" + (narrow ? " narrow" : "")}>
       <div className="app-body">
-        <Ribbon
-          leftOpen={ui.leftOpen} graphActive={active?.kind === "graph"}
-          onToggleLeft={() => setUi({ leftOpen: !ui.leftOpen })} onNew={() => newNote()}
-          onSwitcher={() => setDialog("switcher")} onGraph={openGraph} onUpload={() => requestUpload()}
-          onChat={openChat} onPalette={() => setDialog("palette")} onSync={syncNow} onSettings={() => setDialog("settings")}
-        />
         {leftEl && (
           <>
-            <div className="side-wrap left" style={narrow ? undefined : { width: ui.leftW }}>{leftEl}</div>
+            <div className="side-wrap left" style={narrow ? undefined : { width: ui.leftW }}>
+              <div className="left-col">
+                <Toolbar
+                  graphActive={active?.kind === "graph"} live={live.state}
+                  onNew={() => newNote()} onSwitcher={() => setDialog("switcher")} onGraph={openGraph}
+                  onUpload={() => requestUpload()} onChat={openChat} onPalette={() => setDialog("palette")}
+                  onSync={syncNow} onSettings={() => setDialog("settings")}
+                />
+                {leftEl}
+              </div>
+            </div>
             {!narrow && <div className="resizer" onPointerDown={drag("left")} />}
           </>
         )}
@@ -470,19 +487,22 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
           <TabBar
             tabs={tabViews} activeId={activeId} onSelect={setActiveId} onClose={closeTab} onNew={() => newNote()}
             onToggleRight={() => setUi({ rightOpen: !ui.rightOpen })} rightOpen={ui.rightOpen}
+            leftOpen={ui.leftOpen} onToggleLeft={() => setUi({ leftOpen: !ui.leftOpen })} quickTools={quickTools}
+            user={
+              <UserMenu
+                username={session.username} live={live.state} pending={engine.pendingCount()} theme={ui.theme} compact={narrow}
+                onSettings={() => setDialog("settings")} onSync={syncNow}
+                onToggleTheme={() => setUi({ theme: ui.theme === "dark" ? "light" : "dark" })} onLogout={logoutChecked}
+              />
+            }
           />
           <div className="content">
             {tabs.length === 0 && (
-              <div className="welcome">
-                <h2>🧠 Kho tri thức của {session.username}</h2>
-                <p className="muted">{notes.length} ghi chú · các ghi chú liên quan được tự động liên kết theo ngữ nghĩa.</p>
-                <div className="welcome-actions">
-                  <button className="primary" onClick={() => newNote()}>✚ Ghi chú mới <kbd>Ctrl+N</kbd></button>
-                  <button onClick={() => setDialog("switcher")}>🔎 Mở nhanh <kbd>Ctrl+O</kbd></button>
-                  <button onClick={openGraph}>🕸 Graph view <kbd>Ctrl+G</kbd></button>
-                  <button onClick={() => requestUpload()}>⬆ Tải lên .md / .pdf</button>
-                </div>
-              </div>
+              <Home
+                username={session.username} notes={notes} folders={folders} tagCount={tagCounts.length} theme={ui.theme}
+                onNew={() => newNote()} onSwitcher={() => setDialog("switcher")} onGraph={openGraph}
+                onUpload={() => requestUpload()} onChat={openChat} onOpenKey={openKey}
+              />
             )}
             {tabs.map((t) => {
               const n = t.key ? byKey.get(t.key) : undefined;
@@ -526,7 +546,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
         {narrow && (ui.leftOpen || ui.rightOpen) && <div className="backdrop" onClick={() => setUi({ leftOpen: false, rightOpen: false })} />}
       </div>
       <StatusBar
-        live={live.state} pending={engine.pendingCount()} note={noteForPanels} username={session.username}
+        live={live.state} pending={engine.pendingCount()} note={noteForPanels}
         words={noteForPanels ? wordCount(noteForPanels.content) : 0} chars={noteForPanels ? noteForPanels.content.length : 0}
         onSyncNow={syncNow}
       />
@@ -594,7 +614,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
               Ghi chú được lưu ngay trên thiết bị (dùng được khi ngoại tuyến) và tự đồng bộ khi có mạng.
             </div>
             <div className="modal-actions">
-              <button className="danger" onClick={() => { if (engine.pendingCount() === 0 || confirm("Còn thay đổi chưa đồng bộ trên thiết bị này. Vẫn đăng xuất?")) onLogout(); }}>Đăng xuất</button>
+              <button className="danger" onClick={logoutChecked}>Đăng xuất</button>
               <button onClick={() => setDialog(null)}>Đóng</button>
             </div>
           </div>

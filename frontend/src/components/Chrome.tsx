@@ -1,11 +1,11 @@
+import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { LiveState } from "../lib/live.ts";
 import type { LocalNote } from "../lib/types.ts";
 
-// ------------------------------------------------------------------ Ribbon (thanh công cụ dọc bên trái)
-interface RibbonProps {
-  leftOpen: boolean;
+// ------------------------------------------------------------------ Thanh công cụ ngang (đầu thanh bên trái)
+export interface ToolbarProps {
   graphActive: boolean;
-  onToggleLeft: () => void;
   onNew: () => void;
   onSwitcher: () => void;
   onGraph: () => void;
@@ -14,28 +14,98 @@ interface RibbonProps {
   onPalette: () => void;
   onSync: () => void;
   onSettings: () => void;
+  live: LiveState;
 }
 
-export function Ribbon(p: RibbonProps) {
-  const btn = (icon: string, title: string, onClick: () => void, active = false) => (
-    <button className={"ribbon-btn" + (active ? " active" : "")} title={title} aria-label={title} onClick={onClick}>{icon}</button>
+const toolBtn = (icon: string, title: string, onClick: () => void, cls = "") => (
+  <button key={title} className={"tool-btn " + cls} title={title} aria-label={title} onClick={onClick}>{icon}</button>
+);
+
+export function Toolbar(p: ToolbarProps) {
+  return (
+    <nav className="toolbar" aria-label="Thanh công cụ">
+      {toolBtn("✚", "Ghi chú mới (Ctrl+N)", p.onNew)}
+      {toolBtn("🔎", "Mở nhanh (Ctrl+O)", p.onSwitcher)}
+      {toolBtn("🕸", "Graph view (Ctrl+G)", p.onGraph, p.graphActive ? "active" : "")}
+      {toolBtn("⬆", "Tải lên file .md / .pdf", p.onUpload)}
+      {toolBtn("💬", "Hỏi đáp trên ghi chú", p.onChat)}
+      <span className="spacer" />
+      {toolBtn("⌘", "Bảng lệnh (Ctrl+P)", p.onPalette)}
+      {toolBtn("⟳", p.live === "live" ? "Đã kết nối · bấm để đồng bộ ngay" : "Ngoại tuyến · bấm để thử đồng bộ", p.onSync, "sync " + p.live)}
+      {toolBtn("⚙", "Cài đặt (Ctrl+,)", p.onSettings)}
+    </nav>
+  );
+}
+
+// ------------------------------------------------------------------ Người dùng (góc phải thanh tab)
+const AVATAR_COLORS = ["#c97b63", "#8a9a5b", "#b5838d", "#6d8b9e", "#d4a373", "#9c7aa8", "#7a9e7e", "#c08552"];
+
+/** Màu avatar cố định theo tên đăng nhập (cùng tên → cùng màu trên mọi thiết bị). */
+export function avatarColor(name: string): string {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + (ch.codePointAt(0) ?? 0)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+export function initialOf(name: string): string {
+  const ch = [...name.trim()][0] ?? "?";
+  return ch.toLocaleUpperCase("vi");
+}
+
+interface UserMenuProps {
+  username: string;
+  live: LiveState;
+  pending: number;
+  theme: "dark" | "light";
+  compact: boolean; // điện thoại: chỉ hiện avatar
+  onSettings: () => void;
+  onSync: () => void;
+  onToggleTheme: () => void;
+  onLogout: () => void;
+}
+
+export function UserMenu(p: UserMenuProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: Event) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const status = p.live === "live" ? (p.pending ? `Đang đồng bộ ${p.pending} thay đổi…` : "Đã đồng bộ")
+    : p.live === "connecting" ? "Đang kết nối…" : `Ngoại tuyến${p.pending ? ` · ${p.pending} thay đổi chờ gửi` : ""}`;
+  const item = (label: string, run: () => void, cls = "") => (
+    <button role="menuitem" className={"menu-item " + cls} onClick={() => { setOpen(false); run(); }}>{label}</button>
   );
   return (
-    <nav className="ribbon" aria-label="Thanh công cụ">
-      <div className="ribbon-group">
-        {btn("☰", "Bật/tắt thanh bên trái", p.onToggleLeft, p.leftOpen)}
-        {btn("✚", "Ghi chú mới (Ctrl+N)", p.onNew)}
-        {btn("🔎", "Mở nhanh (Ctrl+O)", p.onSwitcher)}
-        {btn("🕸", "Graph view (Ctrl+G)", p.onGraph, p.graphActive)}
-        {btn("⬆", "Tải lên file .md / .pdf", p.onUpload)}
-        {btn("💬", "Hỏi đáp trên ghi chú", p.onChat)}
-      </div>
-      <div className="ribbon-group">
-        {btn("⌘", "Bảng lệnh (Ctrl+P)", p.onPalette)}
-        {btn("⟳", "Đồng bộ ngay", p.onSync)}
-        {btn("⚙", "Cài đặt (Ctrl+,)", p.onSettings)}
-      </div>
-    </nav>
+    <div className="user-menu" ref={ref}>
+      <button className={"user-chip" + (open ? " open" : "")} aria-haspopup="menu" aria-expanded={open}
+              title={`Đang đăng nhập: ${p.username}`} onClick={() => setOpen(!open)}>
+        <span className="avatar" style={{ background: avatarColor(p.username) }}>{initialOf(p.username)}</span>
+        {!p.compact && <span className="user-name">{p.username}</span>}
+        <span className={"presence " + p.live} aria-hidden />
+        {!p.compact && <span className="caret" aria-hidden>▾</span>}
+      </button>
+      {open && (
+        <div className="menu" role="menu">
+          <div className="menu-head">
+            <span className="avatar big" style={{ background: avatarColor(p.username) }}>{initialOf(p.username)}</span>
+            <div>
+              <div className="menu-name">{p.username}</div>
+              <div className={"muted small sync-text " + p.live}>● {status}</div>
+            </div>
+          </div>
+          {item("⚙  Cài đặt", p.onSettings)}
+          {item("⟳  Đồng bộ ngay", p.onSync)}
+          {item(p.theme === "dark" ? "☀  Giao diện sáng" : "☾  Giao diện tối", p.onToggleTheme)}
+          <div className="menu-sep" />
+          {item("⎋  Đăng xuất", p.onLogout, "danger")}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -56,12 +126,20 @@ interface TabBarProps {
   onNew: () => void;
   onToggleRight: () => void;
   rightOpen: boolean;
+  leftOpen: boolean;
+  onToggleLeft: () => void;
+  /** Công cụ rút gọn hiện cạnh nút ☰ khi thanh bên trái đang đóng. */
+  quickTools?: ReactNode;
+  user: ReactNode;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onNew, onToggleRight, rightOpen }: TabBarProps) {
+export function TabBar({ tabs, activeId, onSelect, onClose, onNew, onToggleRight, rightOpen, leftOpen, onToggleLeft, quickTools, user }: TabBarProps) {
   const icon = (k: TabView["kind"]) => (k === "graph" ? "🕸" : k === "pdf" ? "📕" : "📄");
   return (
     <div className="tabbar" role="tablist">
+      <button className={"tool-btn" + (leftOpen ? " active" : "")} title="Bật/tắt thanh bên trái" aria-label="Bật/tắt thanh bên trái"
+              onClick={onToggleLeft}>☰</button>
+      {!leftOpen && quickTools}
       <div className="tabs-scroll">
         {tabs.map((t) => (
           <div key={t.id} role="tab" aria-selected={t.id === activeId}
@@ -77,7 +155,8 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onNew, onToggleRight
         ))}
         <button className="tab-new" title="Ghi chú mới" aria-label="Ghi chú mới" onClick={onNew}>＋</button>
       </div>
-      <button className={"ribbon-btn small" + (rightOpen ? " active" : "")} title="Bật/tắt thanh bên phải" aria-label="Bật/tắt thanh bên phải" onClick={onToggleRight}>▤</button>
+      <button className={"tool-btn" + (rightOpen ? " active" : "")} title="Bật/tắt thanh bên phải" aria-label="Bật/tắt thanh bên phải" onClick={onToggleRight}>▤</button>
+      {user}
     </div>
   );
 }
@@ -87,13 +166,12 @@ interface StatusProps {
   live: LiveState;
   pending: number;
   note: LocalNote | null;
-  username: string;
   words: number;
   chars: number;
   onSyncNow: () => void;
 }
 
-export function StatusBar({ live, pending, note, username, words, chars, onSyncNow }: StatusProps) {
+export function StatusBar({ live, pending, note, words, chars, onSyncNow }: StatusProps) {
   const syncText =
     live === "live" ? (pending ? `● Đang đồng bộ ${pending} thay đổi…` : "● Đã đồng bộ (trực tiếp)")
     : live === "connecting" ? "◌ Đang kết nối…"
@@ -111,7 +189,6 @@ export function StatusBar({ live, pending, note, username, words, chars, onSyncN
       {note?.has_conflict && <span className="status-item warn">⚠ Xung đột</span>}
       <span className="spacer" />
       {note && <span className="status-item">{words} từ · {chars} ký tự</span>}
-      <span className="status-item">👤 {username}</span>
     </footer>
   );
 }
