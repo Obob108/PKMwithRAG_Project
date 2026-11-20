@@ -22,6 +22,7 @@ from ..core.security import create_token, hash_password, verify_password
 from ..services import notes as notes_svc
 from ..services.indexer import delete_note as delete_note_index
 from ..services.indexer import index_note
+from ..services.llm import LLMBusy
 from ..services.pdf import extract_pdf_markdown
 from ..services.rag import answer_question
 from ..services.retrieval import retrieve
@@ -388,6 +389,9 @@ def chat(body: ChatRequest, request: Request, user: dict = Depends(current_user)
         out = answer_question(conn, st.stores.get(user["id"]), st.embedder, llm, user["id"], body.question,
                               top_k=s.retrieve_top_k, context_k=s.context_top_k, rrf_k=s.rrf_k,
                               use_graph=use_graph, graph_mode="supplement", graph_slots=s.chat_graph_slots)
+    except LLMBusy:
+        log.warning("Hoi dap: moi model deu dang qua tai")
+        raise HTTPException(status_code=503, detail="Mô hình AI đang quá tải (phía Google). Bạn thử lại sau ít phút nhé.")
     except Exception:  # noqa: BLE001
         log.exception("Loi khi hoi dap")
         raise HTTPException(status_code=502, detail="Không gọi được mô hình ngôn ngữ. Thử lại sau.")

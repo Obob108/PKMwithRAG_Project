@@ -171,6 +171,20 @@ def test_chat_with_no_notes_says_not_found(client):
     assert r.status_code == 200 and "Không tìm thấy" in r.json()["answer"] and r.json()["sources"] == []
 
 
+def test_chat_when_llm_overloaded_returns_503_with_clear_message(client):
+    from app.services.llm import LLMBusy
+
+    class BusyLLM:
+        def generate(self, prompt, system=None):
+            raise LLMBusy("qua tai")
+
+    client.app.state.llm = BusyLLM()
+    h = login(client)
+    make_note(client, h, "A", A)
+    r = client.post("/api/chat", headers=h, json={"question": "retrieval augmented generation"})
+    assert r.status_code == 503 and "quá tải" in r.json()["detail"]
+
+
 def test_sync_changes_feed(client):
     h = login(client)
     cursor = client.get("/api/sync/changes", headers=h).json()

@@ -40,5 +40,5 @@ def get_llm(request: Request):
             raise HTTPException(status_code=503, detail="Chưa cấu hình GEMINI_API_KEY trên máy chủ")
         from ..services.llm import GeminiClient
 
-        app.state.llm = GeminiClient(s.gemini_api_key, s.gemini_model)
+        app.state.llm = GeminiClient(s.gemini_api_key, s.gemini_model, fallbacks=s.gemini_fallbacks)
     return app.state.llm

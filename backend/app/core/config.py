@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash"  # doi trong .env neu model nay khong con
+    # Model du phong (cach nhau dau phay), dung khi model chinh qua tai (503) / het han muc (429). De trong = khong co.
+    gemini_fallback_models: str = ""
+
+    @property
+    def gemini_fallbacks(self) -> list[str]:
+        return [m.strip() for m in self.gemini_fallback_models.split(",") if m.strip()]
 
     # Auth
     jwt_secret: str = "change-me"
