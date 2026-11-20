@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import type { HttpApi } from "../lib/api.ts";
-import { buildView, createSim, hitTest, highlightSet, isSettled, neighborSet, stepSim } from "../lib/graphModel.ts";
-import type { GraphData, Sim, SimNode } from "../lib/graphModel.ts";
-import { fold } from "../lib/text.ts";
+import {
+  boundsOf, buildView, createSim, DENSITY_HINT, DENSITY_LABEL, densityCutoffs, folderColors, folderKey, hitTest,
+  highlightSet, isSettled, matchNodes, NO_FOLDER_COLOR, stepSim,
+} from "../lib/graphModel.ts";
+import type { Density, GEdge, GNode, GraphData, SearchMode, Sim, SimNode } from "../lib/graphModel.ts";
+import { extractTags } from "../lib/text.ts";
+import type { Folder, LocalNote } from "../lib/types.ts";
 
 interface Props {
   api: HttpApi;
@@ -10,48 +15,99 @@ interface Props {
   /** Đổi giá trị này khi ghi chú/liên kết có thể đã đổi để tải lại graph. */
   refreshKey: string;
   visible: boolean;
+  /** Ghi chú cục bộ: lấy thư mục mới nhất, thẻ (#tag) và nội dung để tìm/xem trước mà không cần gọi máy chủ. */
+  notes: LocalNote[];
+  folders: Folder[];
+  online: boolean;
   onOpenNote: (id: number) => void;
   onOpenPdf: (id: number) => void;
+  onMoveNote: (id: number, folderId: number | null) => void;
 }
 
 interface Colors {
-  bg: string; fg: string; muted: string; accent: string; md: string; pdf: string; edge: string;
+  bg: string; fg: string; muted: string; accent: string; edge: string;
 }
 
 function readColors(): Colors {
   const cs = getComputedStyle(document.documentElement);
   const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
-  return {
-    bg: v("--bg", "#1e1e1e"), fg: v("--fg", "#dcddde"), muted: v("--muted", "#999"), accent: v("--accent", "#7c6cf0"),
-    md: v("--node-md", "#8b8bff"), pdf: v("--node-pdf", "#f08a5d"), edge: v("--edge", "#888"),
-  };
+  return { bg: v("--bg", "#1e1e1e"), fg: v("--fg", "#dcddde"), muted: v("--muted", "#999"), accent: v("--accent", "#7c6cf0"), edge: v("--edge", "#888") };
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+const DENSITY_KEY = "pkm.graph.density";
+function loadDensity(): Density {
+  try {
+    const v = localStorage.getItem(DENSITY_KEY);
+    return v === "few" || v === "mid" || v === "many" ? v : "mid";
+  } catch {
+    return "mid";
+  }
+}
 
-export default function GraphView({ api, activeNoteId, refreshKey, visible, onOpenNote, onOpenPdf }: Props) {
+const MODE_LABEL: Record<SearchMode, string> = { title: "Tiêu đề", content: "Tiêu đề + nội dung", semantic: "Ngữ nghĩa (AI)" };
+
+/** Đoạn xem trước: bỏ bớt ký hiệu markdown cho dễ đọc. */
+function preview(md: string, max = 260): string {
+  const t = md
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/[*_`>~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+}
+
+export default function GraphView(p: Props) {
+  const { api, activeNoteId, refreshKey, visible, notes, online, onOpenNote, onOpenPdf, onMoveNote } = p;
   const [data, setData] = useState<GraphData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [minScore, setMinScore] = useState(0.75);
+  // bộ lọc
+  // Người dùng chọn mật độ (Ít/Vừa/Nhiều); ngưỡng cosine thô chỉ chỉnh được trong mục "Nâng cao".
+  const [density, setDensityState] = useState<Density>(loadDensity);
+  const setDensity = (d: Density) => {
+    setDensityState(d);
+    try { localStorage.setItem(DENSITY_KEY, d); } catch { /* bỏ qua */ }
+  };
+  const [advanced, setAdvanced] = useState(false);
+  const [customScore, setCustomScore] = useState(0.75);
+  const [showWiki, setShowWiki] = useState(true);
+  const [showSemantic, setShowSemantic] = useState(true);
+  const [hiddenFolders, setHiddenFolders] = useState<Set<string>>(new Set());
+  const [tag, setTag] = useState<string | null>(null);
   const [showOrphans, setShowOrphans] = useState(false);
   const [labels, setLabels] = useState(true);
+  // graph cục bộ
   const [depth, setDepth] = useState(1);
   const [focusId, setFocusId] = useState<number | null>(null);
+  // tìm kiếm
   const [search, setSearch] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>("title");
+  const [semHits, setSemHits] = useState<Map<number, number> | null>(null);
+  const [semState, setSemState] = useState<"idle" | "loading" | "error">("idle");
+  const [cursor, setCursor] = useState(0);
+  // chọn / bảng
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const narrow = typeof window !== "undefined" && window.matchMedia?.("(max-width: 799px)").matches;
+  const [panelOpen, setPanelOpen] = useState(!narrow); // điện thoại: thu gọn sẵn để không che graph
+  const [legendOpen, setLegendOpen] = useState(!narrow);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simRef = useRef<Sim | null>(null);
   const tf = useRef({ x: 0, y: 0, k: 1 });
+  const tfTarget = useRef<{ x: number; y: number; k: number } | null>(null); // camera bay tới (hoạt ảnh)
+  const zoomReq = useRef<number[] | null>(null);
   const size = useRef({ w: 0, h: 0, dpr: 1 });
   const dirty = useRef(true);
-  const fitRequest = useRef(false);
+  const fitRequest = useRef<"instant" | "smooth" | null>(null);
   const dragging = useRef(false);
   const hoverId = useRef<number | null>(null);
   const alphas = useRef(new Map<number, number>());
+  const scales = useRef(new Map<number, number>());
   const colors = useRef<Colors>(readColors());
   const propsRef = useRef({ onOpenNote });
   propsRef.current = { onOpenNote };
@@ -70,19 +126,144 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
     return () => clearTimeout(t);
   }, [visible, refreshKey, load]);
 
+  // ---------------------------------------------------------------- dữ liệu ghép (máy chủ + cục bộ)
+  const localById = useMemo(() => {
+    const m = new Map<number, LocalNote>();
+    for (const n of notes) if (n.id !== null) m.set(n.id, n);
+    return m;
+  }, [notes]);
+  const tagsById = useMemo(() => {
+    const m = new Map<number, string[]>();
+    for (const [id, n] of localById) m.set(id, extractTags(n.content));
+    return m;
+  }, [localById]);
+  // Thư mục lấy theo bản cục bộ (đổi thư mục thấy ngay, không chờ tải lại graph).
+  const merged = useMemo<GraphData | null>(() => {
+    if (!data) return null;
+    return {
+      ...data,
+      nodes: data.nodes.map((n) => {
+        const l = localById.get(n.id);
+        return l ? { ...n, folder_id: l.folder_id ?? null, title: l.title || n.title } : n;
+      }),
+    };
+  }, [data, localById]);
+  const folderList = useMemo(() => (p.folders.length ? p.folders : data?.folders ?? []), [p.folders, data]);
+  const palette = useMemo(() => folderColors(folderList), [folderList]);
+  const folderName = useCallback((key: string) => {
+    if (key === "none") return "Không thư mục";
+    return folderList.find((f) => folderKey(f.id) === key)?.name
+      ?? data?.nodes.find((n) => folderKey(n.folder_id) === key)?.folder_name ?? "Thư mục";
+  }, [folderList, data]);
+  const colorOf = useCallback((n: GNode) => palette.get(folderKey(n.folder_id)) ?? NO_FOLDER_COLOR, [palette]);
+  const allTags = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const n of data?.nodes ?? []) for (const t of tagsById.get(n.id) ?? []) c.set(t, (c.get(t) ?? 0) + 1);
+    return [...c.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [data, tagsById]);
+
+  const tagsOf = useCallback((id: number) => tagsById.get(id) ?? [], [tagsById]);
+  const cutoffs = useMemo(() => densityCutoffs(data?.edges ?? []), [data]);
+  const minScore = advanced ? customScore : cutoffs[density];
+  const scoreRange = useMemo(() => {
+    const sc = (data?.edges ?? []).map((e) => e.semantic_score).filter((x): x is number => x !== null);
+    return sc.length ? { lo: Math.floor(Math.min(...sc) * 100) / 100, hi: Math.ceil(Math.max(...sc) * 100) / 100 } : { lo: 0.5, hi: 1 };
+  }, [data]);
+  // Số liên kết AI hiện ra ở mỗi mức (với các bộ lọc khác đang bật) để người dùng thấy ngay tác dụng.
+  const densityCounts = useMemo(() => {
+    const out = { few: 0, mid: 0, many: 0 } as Record<Density, number>;
+    if (!merged) return out;
+    for (const d of ["few", "mid", "many"] as Density[]) {
+      const v = buildView(merged, { minScore: cutoffs[d], showOrphans, focusId, depth, hiddenFolders, tag, tagsOf, showWiki: false, showSemantic: true });
+      out[d] = v.edges.length;
+    }
+    return out;
+  }, [merged, cutoffs, showOrphans, focusId, depth, hiddenFolders, tag, tagsOf]);
   const view = useMemo<GraphData>(
-    () => (data ? buildView(data, { minScore, showOrphans, focusId, depth }) : { nodes: [], edges: [] }),
-    [data, minScore, showOrphans, focusId, depth],
-  );
-  const selected = view.nodes.find((n) => n.id === selectedId) ?? null;
-  const neighbors = useMemo(
-    () => (selected ? view.nodes.filter((n) => neighborSet(view.edges, selected.id).has(n.id)) : []),
-    [selected, view],
+    () => (merged
+      ? buildView(merged, { minScore, showOrphans, focusId, depth, hiddenFolders, tag, tagsOf, showWiki, showSemantic })
+      : { nodes: [], edges: [] }),
+    [merged, minScore, showOrphans, focusId, depth, hiddenFolders, tag, tagsOf, showWiki, showSemantic],
   );
 
+  // Số ghi chú mỗi thư mục (trước khi lọc thư mục, để chú thích vẫn hiện thư mục đang ẩn).
+  const legendItems = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const n of merged?.nodes ?? []) count.set(folderKey(n.folder_id), (count.get(folderKey(n.folder_id)) ?? 0) + 1);
+    const keys = [...folderList].sort((a, b) => a.name.localeCompare(b.name, "vi")).map((f) => folderKey(f.id));
+    for (const k of count.keys()) if (k !== "none" && !keys.includes(k)) keys.push(k);
+    if (count.has("none")) keys.push("none");
+    return keys.map((k) => ({ key: k, name: folderName(k), color: palette.get(k) ?? NO_FOLDER_COLOR, count: count.get(k) ?? 0 }));
+  }, [merged, folderList, folderName, palette]);
+
+  // ---------------------------------------------------------------- tìm kiếm
+  const q = search.trim();
+  useEffect(() => {
+    if (searchMode !== "semantic" || q.length < 2 || !online) {
+      setSemHits(null);
+      setSemState("idle");
+      return;
+    }
+    let cancelled = false;
+    setSemState("loading");
+    const t = setTimeout(() => {
+      api.search(q, 20)
+        .then((hits) => {
+          if (cancelled) return;
+          const m = new Map<number, number>();
+          for (const h of hits) m.set(h.note_id, Math.max(m.get(h.note_id) ?? 0, h.score)); // gộp các đoạn theo ghi chú
+          setSemHits(m);
+          setSemState("idle");
+        })
+        .catch(() => { if (!cancelled) setSemState("error"); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [q, searchMode, online, api]);
+
+  const matchAll = useMemo<Set<number> | null>(() => {
+    if (!q || !merged) return null;
+    if (searchMode === "semantic") return semHits ? new Set(semHits.keys()) : null;
+    return matchNodes(merged.nodes, q, searchMode, (id) => localById.get(id)?.content ?? "");
+  }, [q, merged, searchMode, semHits, localById]);
+  const visibleIds = useMemo(() => new Set(view.nodes.map((n) => n.id)), [view]);
+  const results = useMemo(() => {
+    if (!matchAll || !merged) return [];
+    const byId = new Map(merged.nodes.map((n) => [n.id, n]));
+    const list = [...matchAll].map((id) => byId.get(id)).filter((n): n is GNode => !!n);
+    if (searchMode === "semantic" && semHits) list.sort((a, b) => (semHits.get(b.id) ?? 0) - (semHits.get(a.id) ?? 0));
+    else list.sort((a, b) => b.degree - a.degree || a.title.localeCompare(b.title, "vi"));
+    return list;
+  }, [matchAll, merged, searchMode, semHits]);
+  const shownResults = results.filter((n) => visibleIds.has(n.id));
+  const hiddenCount = results.length - shownResults.length;
+  const matchVisible = useMemo(() => (matchAll ? new Set([...matchAll].filter((id) => visibleIds.has(id))) : null), [matchAll, visibleIds]);
+  const matchKey = matchVisible ? [...matchVisible].sort((a, b) => a - b).join(",") : "";
+
+  // Kết quả đổi: camera bay tới vùng chứa các ghi chú khớp.
+  useEffect(() => {
+    setCursor(0);
+    if (matchKey) zoomReq.current = matchKey.split(",").map(Number);
+    dirty.current = true;
+  }, [matchKey]);
+
+  const selected = view.nodes.find((n) => n.id === selectedId) ?? null;
+  const neighborInfo = useMemo(() => {
+    if (!selected) return [];
+    const byId = new Map(view.nodes.map((n) => [n.id, n]));
+    const out: { node: GNode; edge: GEdge }[] = [];
+    for (const e of view.edges) {
+      const other = e.source === selected.id ? e.target : e.target === selected.id ? e.source : null;
+      const n = other !== null ? byId.get(other) : undefined;
+      if (n) out.push({ node: n, edge: e });
+    }
+    out.sort((a, b) => Number(b.edge.wiki) - Number(a.edge.wiki) || Number(!!b.edge.accepted) - Number(!!a.edge.accepted)
+      || (b.edge.semantic_score ?? 0) - (a.edge.semantic_score ?? 0));
+    return out;
+  }, [selected, view]);
+
   // Trạng thái mới nhất cho vòng vẽ (tránh dựng lại vòng lặp mỗi lần đổi).
-  const live = useRef({ view, selectedId: selected ? selected.id : null, search, labels });
-  live.current = { view, selectedId: selected ? selected.id : null, search, labels };
+  const live = useRef({ view, selectedId: selected ? selected.id : null, matches: matchVisible, labels, colorOf });
+  live.current = { view, selectedId: selected ? selected.id : null, matches: matchVisible, labels, colorOf };
 
   // Dựng mô phỏng mới khi dữ liệu hiển thị đổi, giữ vị trí cũ để graph không "nhảy".
   useEffect(() => {
@@ -91,7 +272,7 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
     if (!prev || prev.size === 0) {
       for (let i = 0; i < 150; i++) stepSim(sim);
       sim.alpha = 0.3;
-      fitRequest.current = true;
+      fitRequest.current = "instant";
     }
     simRef.current = sim;
     dirty.current = true;
@@ -99,20 +280,24 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
 
   useEffect(() => {
     dirty.current = true;
-  }, [selectedId, search, labels]);
+  }, [selectedId, labels, palette]);
 
-  const fit = useCallback(() => {
+  /** Tính khung nhìn bao các nút `ids` (mọi nút nếu không truyền). */
+  const frameFor = useCallback((ids?: Iterable<number>, maxK = 2) => {
     const sim = simRef.current;
     const { w, h } = size.current;
-    if (!sim || sim.nodes.length === 0 || w === 0) return;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const n of sim.nodes) {
-      x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y);
-    }
-    const k = clamp(Math.min(w / (x1 - x0 + 120), h / (y1 - y0 + 120)), 0.25, 2);
-    tf.current = { k, x: w / 2 - ((x0 + x1) / 2) * k, y: h / 2 - ((y0 + y1) / 2) * k };
-    dirty.current = true;
+    if (!sim || sim.nodes.length === 0 || w === 0) return null;
+    const b = boundsOf(sim, ids ?? sim.nodes.map((n) => n.id));
+    if (!b) return null;
+    const k = clamp(Math.min(w / (b.x1 - b.x0 + 160), h / (b.y1 - b.y0 + 160)), 0.25, maxK);
+    return { k, x: w / 2 - ((b.x0 + b.x1) / 2) * k, y: h / 2 - ((b.y0 + b.y1) / 2) * k };
   }, []);
+
+  const flyTo = useCallback((ids: number[], maxK = 1.6) => {
+    const f = frameFor(ids, maxK);
+    if (f) tfTarget.current = f;
+    dirty.current = true;
+  }, [frameFor]);
 
   // Kích thước canvas + đổi giao diện sáng/tối.
   useEffect(() => {
@@ -141,7 +326,7 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
     };
   }, []);
 
-  // Vòng mô phỏng + vẽ.
+  // ---------------------------------------------------------------- vòng mô phỏng + vẽ
   useEffect(() => {
     if (!visible) return;
     let raf = 0;
@@ -153,8 +338,17 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
       const { w, h, dpr } = size.current;
       if (!sim || !cv || w === 0) return;
       if (fitRequest.current) {
-        fit();
-        fitRequest.current = false;
+        const f = frameFor();
+        if (f) {
+          if (fitRequest.current === "instant") tf.current = f;
+          else tfTarget.current = f;
+        }
+        fitRequest.current = null;
+        dirty.current = true;
+      }
+      if (zoomReq.current) {
+        flyTo(zoomReq.current);
+        zoomReq.current = null;
       }
       let moving = false;
       if (!isSettled(sim) || dragging.current) {
@@ -162,17 +356,29 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
         stepSim(sim);
         moving = true;
       }
-      const { view: v, selectedId: sel, search: q, labels: showLabels } = live.current;
-      const hl = highlightSet(v.edges, sel);
-      const foldedQ = fold(q.trim());
-      const matches = foldedQ ? new Set(v.nodes.filter((n) => fold(n.title).includes(foldedQ)).map((n) => n.id)) : null;
+      if (tfTarget.current) {
+        const t = tf.current, g = tfTarget.current;
+        const nt = { x: t.x + (g.x - t.x) * 0.18, y: t.y + (g.y - t.y) * 0.18, k: t.k + (g.k - t.k) * 0.18 };
+        if (Math.abs(nt.x - g.x) < 0.5 && Math.abs(nt.y - g.y) < 0.5 && Math.abs(nt.k - g.k) < 0.002) {
+          tf.current = g;
+          tfTarget.current = null;
+        } else tf.current = nt;
+        moving = true;
+      }
+      const { view: v, selectedId: sel, matches, labels: showLabels, colorOf: colorFn } = live.current;
+      const focus = hoverId.current ?? sel; // rê chuột ưu tiên hơn nút đang chọn
+      const hl = highlightSet(v.edges, focus);
       let animating = false;
       for (const n of v.nodes) {
-        const target = hl ? (hl.has(n.id) ? 1 : 0.12) : matches ? (matches.has(n.id) ? 1 : 0.15) : 1;
-        const cur = alphas.current.get(n.id) ?? target;
-        const next = Math.abs(target - cur) < 0.01 ? target : cur + (target - cur) * 0.25;
-        if (next !== target) animating = true;
-        alphas.current.set(n.id, next);
+        const isMatch = matches?.has(n.id) ?? false;
+        const ta = hl ? (hl.has(n.id) ? 1 : 0.12) : matches ? (isMatch ? 1 : 0.13) : 1;
+        const ts = matches && isMatch ? 1.6 : n.id === hoverId.current ? 1.25 : 1;
+        for (const [store, target] of [[alphas.current, ta], [scales.current, ts]] as const) {
+          const cur = store.get(n.id) ?? target;
+          const next = Math.abs(target - cur) < 0.01 ? target : cur + (target - cur) * 0.25;
+          if (next !== target) animating = true;
+          store.set(n.id, next);
+        }
       }
       if (!moving && !animating && !dirty.current) return;
       dirty.current = false;
@@ -186,45 +392,58 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
       c.fillRect(0, 0, w, h);
       const alphaOf = (id: number) => alphas.current.get(id) ?? 1;
 
+      // Cạnh: [[liên kết]] = nét liền, đậm; ngữ nghĩa = nét đứt, độ đậm theo độ tương đồng.
       for (const e of v.edges) {
         const a = sim.nodes[sim.index.get(e.source) ?? -1];
         const b = sim.nodes[sim.index.get(e.target) ?? -1];
         if (!a || !b) continue;
-        const touches = sel !== null && (e.source === sel || e.target === sel);
-        const strong = e.wiki || !!e.accepted; // do người dùng viết hoặc đã xác nhận
-        const base = touches ? 1 : strong ? 0.75 : 0.25 + 0.35 * clamp(e.semantic_score ?? 0.5, 0, 1);
+        const touches = focus !== null && (e.source === focus || e.target === focus);
+        const sem = clamp(e.semantic_score ?? 0.5, 0, 1);
+        const strong = e.wiki || !!e.accepted; // do người dùng viết [[…]] hoặc đã ✓ gợi ý
+        const base = touches ? 1 : strong ? 0.75 : 0.3 + 0.45 * sem;
         c.globalAlpha = Math.min(alphaOf(e.source), alphaOf(e.target)) * base;
         c.strokeStyle = touches || strong ? col.accent : col.edge;
-        c.lineWidth = touches ? 2 : strong ? 1.6 : 1;
+        c.lineWidth = (touches ? 2 : strong ? 1.6 : 1) * clamp(k, 0.6, 1.4);
+        c.setLineDash(strong ? [] : [5 * clamp(k, 0.6, 1.4), 4 * clamp(k, 0.6, 1.4)]);
         c.beginPath();
         c.moveTo(tx + a.x * k, ty + a.y * k);
         c.lineTo(tx + b.x * k, ty + b.y * k);
         c.stroke();
       }
+      c.setLineDash([]);
 
+      // Nút: màu = thư mục; hình tròn = ghi chú, hình vuông bo góc = PDF.
       const info = new Map(v.nodes.map((n) => [n.id, n]));
       for (const n of sim.nodes) {
         const meta = info.get(n.id);
         if (!meta) continue;
         const al = alphaOf(n.id);
+        const sc = scales.current.get(n.id) ?? 1;
         const sx = tx + n.x * k;
         const sy = ty + n.y * k;
-        const rr = n.r * clamp(k, 0.7, 1.5);
+        const rr = n.r * clamp(k, 0.7, 1.5) * sc;
+        const isMatch = matches?.has(n.id) ?? false;
         c.globalAlpha = al;
-        c.fillStyle = meta.source === "pdf" ? col.pdf : col.md;
+        c.fillStyle = colorFn(meta);
+        if (isMatch) {
+          c.shadowColor = colorFn(meta);
+          c.shadowBlur = 14;
+        }
         c.beginPath();
-        c.arc(sx, sy, rr, 0, Math.PI * 2);
+        if (meta.source === "pdf") c.roundRect(sx - rr, sy - rr, rr * 2, rr * 2, rr * 0.35);
+        else c.arc(sx, sy, rr, 0, Math.PI * 2);
         c.fill();
-        if (n.id === sel || n.id === hoverId.current) {
+        c.shadowBlur = 0;
+        if (n.id === sel || n.id === hoverId.current || isMatch) {
           c.strokeStyle = n.id === sel ? col.accent : col.fg;
-          c.lineWidth = n.id === sel ? 3 : 1.5;
+          c.lineWidth = n.id === sel ? 3 : isMatch ? 2 : 1.5;
           c.stroke();
         }
-        const showLabel = showLabels && (k > 0.9 || (hl?.has(n.id) ?? false) || n.id === hoverId.current || meta.degree >= 4);
+        const showLabel = (showLabels && (k > 0.9 || (hl?.has(n.id) ?? false) || meta.degree >= 4)) || n.id === hoverId.current || isMatch;
         if (showLabel && al > 0.3) {
           c.globalAlpha = al;
           c.fillStyle = col.fg;
-          c.font = "11px system-ui, sans-serif";
+          c.font = `${isMatch ? "600 12px" : "11px"} system-ui, sans-serif`;
           c.textAlign = "center";
           const t = meta.title.length > 28 ? meta.title.slice(0, 27) + "…" : meta.title;
           c.fillText(t, sx, sy + rr + 13);
@@ -234,9 +453,9 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [visible, fit]);
+  }, [visible, frameFor, flyTo]);
 
-  // Tương tác: kéo nút, kéo nền, thu phóng (con lăn / chụm 2 ngón), chạm nút, chạm đôi để mở.
+  // ---------------------------------------------------------------- tương tác: kéo nút, kéo nền, thu phóng, chạm, rê chuột
   useEffect(() => {
     const cv = canvasRef.current;
     if (!cv) return;
@@ -251,6 +470,7 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
     };
     const world = (x: number, y: number) => ({ x: (x - tf.current.x) / tf.current.k, y: (y - tf.current.y) / tf.current.k });
     const zoomAt = (px: number, py: number, factor: number) => {
+      tfTarget.current = null; // người dùng tự điều khiển: dừng hoạt ảnh camera
       const t = tf.current;
       const k = clamp(t.k * factor, 0.15, 4);
       tf.current = { k, x: px - (px - t.x) * (k / t.k), y: py - (py - t.y) * (k / t.k) };
@@ -260,24 +480,32 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
       const [a, b] = [...pointers.values()];
       return Math.hypot(a.x - b.x, a.y - b.y);
     };
+    const setHover = (id: number | null) => {
+      if (id !== hoverId.current) {
+        hoverId.current = id;
+        cv.style.cursor = id !== null ? "pointer" : "grab";
+        dirty.current = true;
+      }
+    };
 
     const down = (e: PointerEvent) => {
       cv.setPointerCapture(e.pointerId);
-      const p = local(e);
-      pointers.set(e.pointerId, p);
+      tfTarget.current = null;
+      const pt = local(e);
+      pointers.set(e.pointerId, pt);
       if (pointers.size === 2) {
         gesture = { ...gesture, kind: "pinch", dist: pinchDist(), moved: true };
         return;
       }
-      const w = world(p.x, p.y);
+      const w = world(pt.x, pt.y);
       const sim = simRef.current;
       const hit = sim ? hitTest(sim, w.x, w.y, 6 / tf.current.k) : null;
-      gesture = { kind: hit ? "node" : "pan", node: hit, sx: p.x, sy: p.y, lx: p.x, ly: p.y, moved: false, dist: 0 };
+      gesture = { kind: hit ? "node" : "pan", node: hit, sx: pt.x, sy: pt.y, lx: pt.x, ly: pt.y, moved: false, dist: 0 };
     };
 
     const move = (e: PointerEvent) => {
-      const p = local(e);
-      if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
+      const pt = local(e);
+      if (pointers.has(e.pointerId)) pointers.set(e.pointerId, pt);
       if (gesture.kind === "pinch" && pointers.size >= 2) {
         const d = pinchDist();
         const [a, b] = [...pointers.values()];
@@ -286,9 +514,9 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
         return;
       }
       if (gesture.kind === "node" && gesture.node) {
-        if (!gesture.moved && Math.hypot(p.x - gesture.sx, p.y - gesture.sy) > 4) gesture.moved = true;
+        if (!gesture.moved && Math.hypot(pt.x - gesture.sx, pt.y - gesture.sy) > 4) gesture.moved = true;
         if (gesture.moved) {
-          const w = world(p.x, p.y);
+          const w = world(pt.x, pt.y);
           gesture.node.fixed = true;
           gesture.node.x = w.x;
           gesture.node.y = w.y;
@@ -298,24 +526,20 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
         return;
       }
       if (gesture.kind === "pan") {
-        if (!gesture.moved && Math.hypot(p.x - gesture.sx, p.y - gesture.sy) > 4) gesture.moved = true;
+        if (!gesture.moved && Math.hypot(pt.x - gesture.sx, pt.y - gesture.sy) > 4) gesture.moved = true;
         if (gesture.moved) {
-          tf.current = { ...tf.current, x: tf.current.x + (p.x - gesture.lx), y: tf.current.y + (p.y - gesture.ly) };
+          tf.current = { ...tf.current, x: tf.current.x + (pt.x - gesture.lx), y: tf.current.y + (pt.y - gesture.ly) };
           dirty.current = true;
         }
-        gesture.lx = p.x;
-        gesture.ly = p.y;
+        gesture.lx = pt.x;
+        gesture.ly = pt.y;
         return;
       }
-      // di chuột (không nhấn): tô sáng nút đang trỏ vào
-      const w = world(p.x, p.y);
+      // rê chuột (không nhấn): làm nổi bật nút đang trỏ và các nút láng giềng
+      if (e.pointerType === "touch") return;
+      const w = world(pt.x, pt.y);
       const hit = simRef.current ? hitTest(simRef.current, w.x, w.y, 6 / tf.current.k) : null;
-      const id = hit ? hit.id : null;
-      if (id !== hoverId.current) {
-        hoverId.current = id;
-        cv.style.cursor = id !== null ? "pointer" : "grab";
-        dirty.current = true;
-      }
+      setHover(hit ? hit.id : null);
     };
 
     const up = (e: PointerEvent) => {
@@ -329,11 +553,11 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
         if (!gesture.moved) {
           const now = performance.now();
           if (lastTap.id === n.id && now - lastTap.t < 350) {
-            propsRef.current.onOpenNote(n.id);
+            propsRef.current.onOpenNote(n.id); // chạm / bấm đôi: mở ghi chú
             lastTap = { id: -1, t: 0 };
           } else {
             lastTap = { id: n.id, t: now };
-            setSelectedId(n.id);
+            setSelectedId(n.id); // bấm một lần: mở bảng xem trước
           }
         }
         n.fixed = false;
@@ -344,6 +568,7 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
       gesture = { ...gesture, kind: "none", node: null };
     };
 
+    const leave = () => setHover(null);
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
       const r = cv.getBoundingClientRect();
@@ -354,17 +579,46 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
     cv.addEventListener("pointermove", move);
     cv.addEventListener("pointerup", up);
     cv.addEventListener("pointercancel", up);
+    cv.addEventListener("pointerleave", leave);
     cv.addEventListener("wheel", wheel, { passive: false });
     return () => {
       cv.removeEventListener("pointerdown", down);
       cv.removeEventListener("pointermove", move);
       cv.removeEventListener("pointerup", up);
       cv.removeEventListener("pointercancel", up);
+      cv.removeEventListener("pointerleave", leave);
       cv.removeEventListener("wheel", wheel);
     };
   }, []);
 
-  const focusTitle = focusId !== null ? data?.nodes.find((n) => n.id === focusId)?.title : null;
+  // ---------------------------------------------------------------- thao tác giao diện
+  const goTo = (id: number) => {
+    setSelectedId(id);
+    flyTo([id], 1.6);
+  };
+  const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") setSearch("");
+    if (e.key === "Enter" && shownResults.length) {
+      e.preventDefault();
+      const i = cursor % shownResults.length;
+      goTo(shownResults[i].id); // Enter: lần lượt nhảy tới từng kết quả
+      setCursor(i + 1);
+    }
+  };
+  const toggleFolder = (key: string) => setHiddenFolders((s) => {
+    const next = new Set(s);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const soloFolder = (key: string) => setHiddenFolders(() => {
+    const all = legendItems.map((x) => x.key).filter((k) => k !== key);
+    return hiddenFolders.size === all.length && !hiddenFolders.has(key) ? new Set() : new Set(all);
+  });
+
+  const focusTitle = focusId !== null ? merged?.nodes.find((n) => n.id === focusId)?.title : null;
+  const selLocal = selected ? localById.get(selected.id) : undefined;
+  const selFolderKey = selected ? folderKey(selected.folder_id) : "none";
+  const filtersActive = hiddenFolders.size > 0 || tag !== null || !showWiki || !showSemantic || focusId !== null;
 
   return (
     <div className="graph-pane" ref={wrapRef}>
@@ -372,55 +626,206 @@ export default function GraphView({ api, activeNoteId, refreshKey, visible, onOp
 
       {view.nodes.length === 0 && !loading && (
         <div className="graph-empty">
-          {error ?? "Chưa có liên kết nào để hiển thị. Thêm ghi chú liên quan, dùng [[liên kết]], hạ ngưỡng ở bảng điều khiển, hoặc bật “Hiện ghi chú mồ côi”."}
+          {error ?? (filtersActive
+            ? "Không có ghi chú nào khớp bộ lọc hiện tại. Bỏ bớt bộ lọc ở bảng điều khiển hoặc chú thích thư mục."
+            : "Chưa có liên kết nào để hiển thị. Thêm ghi chú liên quan, dùng [[liên kết]], hạ ngưỡng ở bảng điều khiển, hoặc bật “Hiện ghi chú mồ côi”.")}
         </div>
       )}
 
+      {/* ---------------- bảng điều khiển: tìm kiếm + bộ lọc + graph cục bộ */}
       <div className={"graph-controls" + (panelOpen ? "" : " collapsed")}>
-        <button className="graph-toggle" onClick={() => setPanelOpen(!panelOpen)} aria-label="Bảng điều khiển graph">{panelOpen ? "▾ Bộ lọc" : "▸ Bộ lọc"}</button>
+        <button className="graph-toggle" onClick={() => setPanelOpen(!panelOpen)} aria-label="Bảng điều khiển graph">
+          {panelOpen ? "▾ Tìm kiếm & bộ lọc" : "▸ Tìm kiếm & bộ lọc"}
+        </button>
         {panelOpen && (
           <>
-            <input className="search-input" placeholder="Làm nổi bật theo tên…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            <label className="slider">
-              <span>Ngưỡng liên kết ngữ nghĩa: <b>{minScore.toFixed(2)}</b></span>
-              <input type="range" min={0.6} max={0.95} step={0.01} value={minScore} onChange={(e) => setMinScore(Number(e.target.value))} />
-            </label>
-            <label className="check"><input type="checkbox" checked={showOrphans} onChange={(e) => setShowOrphans(e.target.checked)} /> Hiện ghi chú mồ côi</label>
-            <label className="check"><input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Hiện nhãn</label>
-            <label className="check">
-              <input type="checkbox" checked={focusId !== null} disabled={activeNoteId === null && focusId === null}
-                     onChange={(e) => setFocusId(e.target.checked ? activeNoteId : null)} />
-              Chỉ lân cận{focusTitle ? `: ${focusTitle}` : " ghi chú đang mở"}
-            </label>
-            {focusId !== null && (
-              <label className="slider"><span>Độ sâu: <b>{depth}</b></span>
-                <input type="range" min={1} max={3} step={1} value={depth} onChange={(e) => setDepth(Number(e.target.value))} />
+            <div className="graph-section">
+              <div className="graph-search">
+                <input className="search-input" placeholder="Tìm trên graph…" value={search}
+                       onChange={(e) => setSearch(e.target.value)} onKeyDown={onSearchKey} />
+                {search && <button className="icon" aria-label="Xóa tìm kiếm" onClick={() => setSearch("")}>×</button>}
+              </div>
+              <div className="seg small" role="group" aria-label="Kiểu tìm">
+                {(["title", "content", "semantic"] as SearchMode[]).map((m) => (
+                  <button key={m} className={searchMode === m ? "active" : ""} disabled={m === "semantic" && !online}
+                          title={m === "semantic" && !online ? "Cần kết nối máy chủ" : MODE_LABEL[m]}
+                          onClick={() => setSearchMode(m)}>
+                    {m === "title" ? "Tiêu đề" : m === "content" ? "Nội dung" : "Ngữ nghĩa"}
+                  </button>
+                ))}
+              </div>
+              {q && (
+                <div className="graph-results">
+                  <div className="muted small">
+                    {searchMode === "semantic" && semState === "loading" ? "Đang tìm theo ngữ nghĩa…"
+                      : searchMode === "semantic" && semState === "error" ? "Không tìm được (cần kết nối máy chủ)."
+                      : searchMode === "semantic" && q.length < 2 ? "Gõ ít nhất 2 ký tự."
+                      : `${shownResults.length} ghi chú khớp${hiddenCount ? ` · ${hiddenCount} bị ẩn bởi bộ lọc` : ""}${shownResults.length > 1 ? " · Enter để nhảy lần lượt" : ""}`}
+                  </div>
+                  <ul className="neighbor-list">
+                    {shownResults.slice(0, 8).map((n) => (
+                      <li key={n.id}>
+                        <button onClick={() => goTo(n.id)} className={n.id === selectedId ? "active" : ""}>
+                          <span className="dot" style={{ background: colorOf(n) }} /> <span className="nl-title">{n.title}</span>
+                          {searchMode === "semantic" && semHits?.has(n.id) && <span className="badge" title="Mức khớp với nội dung tìm kiếm">{Math.round((semHits.get(n.id) ?? 0) * 100)}%</span>}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="graph-section">
+              <div className="graph-section-title">Liên kết</div>
+              <label className="check"><input type="checkbox" checked={showWiki} onChange={(e) => setShowWiki(e.target.checked)} />
+                <svg width="28" height="8" aria-hidden><line x1="1" y1="4" x2="27" y2="4" className="edge-wiki" /></svg> Thủ công [[…]] và gợi ý đã ✓</label>
+              <label className="check"><input type="checkbox" checked={showSemantic} onChange={(e) => setShowSemantic(e.target.checked)} />
+                <svg width="28" height="8" aria-hidden><line x1="1" y1="4" x2="27" y2="4" className="edge-sem" /></svg> Gợi ý bởi AI (nội dung giống nhau)</label>
+              <div className="muted small">Gợi ý đã bỏ qua (✗) không hiện trên graph.</div>
+              {showSemantic && !advanced && (
+                <div className="density">
+                  <div className="muted small">Số liên kết AI muốn xem</div>
+                  <div className="seg small density-seg" role="radiogroup" aria-label="Mật độ liên kết AI">
+                    {(["few", "mid", "many"] as Density[]).map((d) => (
+                      <button key={d} role="radio" aria-checked={density === d} className={density === d ? "active" : ""}
+                              title={DENSITY_HINT[d]} onClick={() => setDensity(d)}>
+                        {DENSITY_LABEL[d]} <span className="count">{densityCounts[d]}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="muted small">{DENSITY_HINT[density]}</div>
+                </div>
+              )}
+              {showSemantic && (
+                <details className="advanced" open={advanced}
+                         onToggle={(e) => {
+                           const open = (e.currentTarget as HTMLDetailsElement).open;
+                           if (open && !advanced) setCustomScore(Number(cutoffs[density].toFixed(2)) || scoreRange.lo);
+                           setAdvanced(open);
+                         }}>
+                  <summary className="muted small">Nâng cao</summary>
+                  <label className="slider">
+                    <span>Độ tương đồng cosine tối thiểu: <b>{customScore.toFixed(2)}</b></span>
+                    <input type="range" min={scoreRange.lo} max={scoreRange.hi} step={0.01} value={customScore}
+                           onChange={(e) => setCustomScore(Number(e.target.value))} />
+                  </label>
+                  <div className="muted small">
+                    Mốc tự tính: Ít ≥ {cutoffs.few.toFixed(2)} · Vừa ≥ {cutoffs.mid.toFixed(2)} · Nhiều = mọi cạnh đã lưu
+                    (≥ {scoreRange.lo.toFixed(2)}). Đóng mục này để quay lại chọn theo mức.
+                  </div>
+                </details>
+              )}
+            </div>
+
+            <div className="graph-section">
+              <div className="graph-section-title">Lọc ghi chú</div>
+              <label className="field small">
+                <span>Thẻ</span>
+                <select value={tag ?? ""} onChange={(e) => setTag(e.target.value || null)}>
+                  <option value="">Tất cả thẻ</option>
+                  {allTags.map(([t, c]) => <option key={t} value={t}>#{t} ({c})</option>)}
+                </select>
               </label>
-            )}
+              <div className="muted small">Thư mục: bấm vào tên trong bảng “Thư mục” để ẩn/hiện, bấm đôi để chỉ xem thư mục đó.</div>
+              <label className="check"><input type="checkbox" checked={showOrphans} onChange={(e) => setShowOrphans(e.target.checked)} /> Hiện ghi chú mồ côi</label>
+              <label className="check"><input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Hiện nhãn</label>
+            </div>
+
+            <div className="graph-section">
+              <div className="graph-section-title">Graph cục bộ</div>
+              <label className="check">
+                <input type="checkbox" checked={focusId !== null} disabled={activeNoteId === null && focusId === null && selectedId === null}
+                       onChange={(e) => setFocusId(e.target.checked ? selectedId ?? activeNoteId : null)} />
+                Chỉ lân cận{focusTitle ? `: ${focusTitle}` : selectedId !== null ? " ghi chú đang chọn" : " ghi chú đang mở"}
+              </label>
+              {focusId !== null && (
+                <label className="slider"><span>Độ sâu: <b>{depth}</b> bước</span>
+                  <input type="range" min={1} max={3} step={1} value={depth} onChange={(e) => setDepth(Number(e.target.value))} />
+                </label>
+              )}
+            </div>
+
             <div className="graph-buttons">
-              <button onClick={() => { fitRequest.current = true; }}>Căn lại</button>
+              <button onClick={() => { fitRequest.current = "smooth"; dirty.current = true; }}>Căn lại</button>
               <button onClick={load} disabled={loading}>{loading ? "Đang tải…" : "Làm mới"}</button>
+              {filtersActive && (
+                <button onClick={() => { setHiddenFolders(new Set()); setTag(null); setShowWiki(true); setShowSemantic(true); setFocusId(null); setAdvanced(false); }}>Bỏ lọc</button>
+              )}
             </div>
             <div className="muted small">{view.nodes.length} ghi chú · {view.edges.length} liên kết</div>
-            <div className="legend small"><span className="dot md" /> Ghi chú <span className="dot pdf" /> PDF · đường đậm: [[liên kết]] hoặc gợi ý đã ✓, mảnh: gợi ý ngữ nghĩa</div>
           </>
         )}
       </div>
 
+      {/* ---------------- chú thích màu thư mục (bấm để ẩn/hiện, bấm đôi để chỉ xem thư mục đó) */}
+      {legendItems.length > 0 && (
+        <div className={"graph-legend" + (legendOpen ? "" : " collapsed")}>
+          <button className="graph-toggle" onClick={() => setLegendOpen(!legendOpen)}>{legendOpen ? "▾ Thư mục" : "▸ Thư mục"}</button>
+          {legendOpen && (
+            <>
+              <ul>
+                {legendItems.map((it) => (
+                  <li key={it.key}>
+                    <button className={hiddenFolders.has(it.key) ? "off" : ""} onClick={() => toggleFolder(it.key)}
+                            onDoubleClick={() => soloFolder(it.key)}
+                            title={hiddenFolders.has(it.key) ? "Bấm để hiện" : "Bấm để ẩn · bấm đôi để chỉ xem thư mục này"}>
+                      <span className="dot" style={{ background: it.color }} />
+                      <span className="legend-name">{it.name}</span>
+                      <span className="badge">{it.count}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="legend small">
+                <span className="shape circle" /> Ghi chú <span className="shape square" /> PDF
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ---------------- bảng xem trước ghi chú đang chọn */}
       {selected && (
         <div className="graph-card">
           <div className="graph-card-title">{selected.source === "pdf" ? "📕" : "📄"} {selected.title}</div>
-          <div className="muted small">{neighbors.length} ghi chú liên quan</div>
+          <label className="field small">
+            <span className="dot" style={{ background: palette.get(selFolderKey) ?? NO_FOLDER_COLOR }} />
+            <select value={selected.folder_id ?? ""} disabled={!selLocal} title="Chuyển ghi chú sang thư mục khác"
+                    onChange={(e) => onMoveNote(selected.id, e.target.value === "" ? null : Number(e.target.value))}>
+              <option value="">Không thư mục</option>
+              {folderList.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </label>
+          {(tagsById.get(selected.id) ?? []).length > 0 && (
+            <div className="chip-row">
+              {(tagsById.get(selected.id) ?? []).map((t) => (
+                <button key={t} className={"chip" + (tag === t ? " active" : "")} onClick={() => setTag(tag === t ? null : t)} title="Lọc graph theo thẻ này">#{t}</button>
+              ))}
+            </div>
+          )}
+          {selLocal && <div className="graph-preview">{preview(selLocal.content) || <span className="muted">(Ghi chú trống)</span>}</div>}
           <div className="graph-card-actions">
             <button className="primary" onClick={() => onOpenNote(selected.id)}>Mở ghi chú</button>
             {selected.has_file && <button onClick={() => onOpenPdf(selected.id)}>📕 Mở PDF</button>}
-            <button onClick={() => setFocusId(selected.id)} title="Chỉ hiện ghi chú này và các ghi chú nối với nó">Chỉ lân cận</button>
-            <button onClick={() => setSelectedId(null)}>Bỏ chọn</button>
+            {focusId === selected.id
+              ? <button onClick={() => setFocusId(null)}>Xem toàn bộ</button>
+              : <button onClick={() => setFocusId(selected.id)} title="Chỉ hiện ghi chú này và các ghi chú nối với nó">Chỉ lân cận</button>}
+            <button onClick={() => setSelectedId(null)}>Đóng</button>
           </div>
-          {neighbors.length > 0 && (
+          <div className="muted small">{neighborInfo.length} ghi chú liên kết</div>
+          {neighborInfo.length > 0 && (
             <ul className="neighbor-list">
-              {neighbors.map((n) => (
-                <li key={n.id}><button onClick={() => setSelectedId(n.id)}>{n.source === "pdf" ? "📕" : "📄"} {n.title}</button></li>
+              {neighborInfo.map(({ node: n, edge }) => (
+                <li key={n.id}>
+                  <button onClick={() => goTo(n.id)}>
+                    <span className="dot" style={{ background: colorOf(n) }} /> <span className="nl-title">{n.title}</span>
+                    <span className="badge" title={edge.semantic_score !== null ? `Mức giống nhau về nội dung (AI tính)${edge.accepted ? ", bạn đã xác nhận ✓" : ""}` : "Liên kết bạn tự tạo bằng [[…]]"}>
+                      {edge.wiki ? "[[ ]]" : ""}{edge.wiki && edge.semantic_score !== null ? " · " : ""}
+                      {edge.semantic_score !== null ? `${edge.accepted ? "✓ " : ""}giống ${Math.round(edge.semantic_score * 100)}%` : ""}
+                    </span>
+                  </button>
+                </li>
               ))}
             </ul>
           )}

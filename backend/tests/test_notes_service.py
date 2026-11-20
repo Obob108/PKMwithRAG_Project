@@ -490,3 +490,13 @@ def test_explain_link_returns_best_chunk_pairs_oriented_to_caller():
             raise AssertionError("expected " + exc.__name__)
         except exc:
             pass
+
+
+def test_graph_nodes_carry_folder_name():
+    conn = _conn()
+    f = notes.create_folder(conn, 1, "RAG")
+    notes.create_note(conn, 1, "A", "x", folder_id=f["id"])
+    notes.create_note(conn, 1, "B", "y")
+    by = {n["title"]: n for n in notes.graph(conn, 1)["nodes"]}
+    assert (by["A"]["folder_id"], by["A"]["folder_name"]) == (f["id"], "RAG")
+    assert (by["B"]["folder_id"], by["B"]["folder_name"]) == (None, None)

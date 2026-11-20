@@ -491,7 +491,9 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
                 return (
                   <div key={t.id} className="tab-panel" hidden={!shown}>
                     <GraphView api={api} activeNoteId={noteForPanels?.id ?? null} refreshKey={graphKey} visible={shown}
-                               onOpenNote={(id) => void openId(id)} onOpenPdf={openPdfById} />
+                               notes={notes} folders={folders} online={online}
+                               onOpenNote={(id) => void openId(id)} onOpenPdf={openPdfById}
+                               onMoveNote={(id, folderId) => { const k = engine.keyById(id); if (k) moveNote(k, folderId); }} />
                   </div>
                 );
               }

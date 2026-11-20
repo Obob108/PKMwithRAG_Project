@@ -463,8 +463,9 @@ def graph(conn, user_id: int, min_score: float = 0.0) -> dict:
         degree[a] = degree.get(a, 0) + 1
         degree[b] = degree.get(b, 0) + 1
     nodes = [{"id": r["id"], "title": r["title"], "source": r["source"], "has_file": bool(r["file_path"]),
-              "folder_id": r["folder_id"], "degree": degree.get(r["id"], 0)}
+              "folder_id": r["folder_id"], "folder_name": r["folder_name"], "degree": degree.get(r["id"], 0)}
              for r in conn.execute(
-                 "SELECT id, title, source, file_path, folder_id FROM notes WHERE user_id = ? ORDER BY id",
+                 "SELECT n.id, n.title, n.source, n.file_path, n.folder_id, f.name AS folder_name "
+                 "FROM notes n LEFT JOIN folders f ON f.id = n.folder_id WHERE n.user_id = ? ORDER BY n.id",
                  (user_id,))]
     return {"nodes": nodes, "edges": list(pairs.values())}

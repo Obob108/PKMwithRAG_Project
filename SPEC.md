@@ -80,8 +80,21 @@ Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện tho
 - Tab: ghi chú, PDF gốc, Graph view. Editor: soạn / xem / chia đôi, thanh định dạng, tự hoàn thành [[, #thẻ, callout, bảng,
   việc cần làm; đổi tên ghi chú tự cập nhật [[liên kết]] ở ghi chú khác. Thanh trạng thái: đồng bộ trực tiếp/ngoại tuyến, số thay đổi chờ,
   trạng thái lập chỉ mục, phiên bản, xung đột, số từ.
-- Graph view: chỉ hiện ghi chú có liên kết (có công tắc “ghi chú mồ côi”), ngưỡng cosine, chế độ “chỉ lân cận” theo độ sâu;
-  bấm một nút → nút và hàng xóm sáng, phần còn lại mờ; bấm đúp hoặc “Mở ghi chú” → mở ghi chú; ghi chú từ PDF có nút “Mở PDF”.
+- Graph view (mục đích: công cụ khám phá và điều hướng tri thức, không chỉ để xem):
+  · Màu nút = thư mục (bảng màu cố định theo id thư mục), hình tròn = ghi chú, vuông = PDF; bảng “Thư mục” ở góc là chú thích
+    đồng thời là bộ lọc (bấm để ẩn/hiện, bấm đôi để chỉ xem một thư mục). /graph trả folder_id + folder_name cho mỗi nút.
+  · Tìm trên graph: theo tiêu đề / tiêu đề + nội dung (trên máy, không dấu) / ngữ nghĩa (GET /search, gộp điểm theo ghi chú).
+    Nút khớp to hơn, phát sáng, có nhãn; nút khác mờ; camera bay tới vùng chứa kết quả; Enter nhảy lần lượt từng kết quả.
+  · Bộ lọc: thẻ (#tag, lấy từ nội dung cục bộ), loại liên kết (nét liền = [[…]] hoặc gợi ý đã ✓; nét đứt = gợi ý AI chưa duyệt;
+    gợi ý đã ✗ không bao giờ hiện), ghi chú mồ côi, nhãn.
+  · Mật độ liên kết AI: người dùng chọn Ít / Vừa / Nhiều (kèm số liên kết mỗi mức) thay vì nhập ngưỡng cosine. Mốc tính theo
+    phân vị điểm của chính kho ghi chú: Ít = 25% cạnh mạnh nhất (phân vị 75), Vừa = 50% (trung vị), Nhiều = mọi cạnh đã lưu
+    (≥ LINK_THRESHOLD lúc lập chỉ mục). Lý do: cosine phụ thuộc mô hình embedding và mức đồng chủ đề của kho nên một số cố
+    định (vd 0.75) không có nghĩa ổn định. Gợi ý đã ✓ luôn hiện ở mọi mức. Ngưỡng cosine thô vẫn chỉnh được trong mục
+    “Nâng cao” (dùng khi thử nghiệm/báo cáo). Kho mẫu: Ít ≥ 0.74 → 26 cạnh, Vừa ≥ 0.70 → 51, Nhiều ≥ 0.65 → 101.
+  · Rê chuột → nút và láng giềng sáng; bấm một lần → bảng xem trước (thư mục + đổi thư mục, thẻ, đoạn đầu nội dung, danh sách
+    láng giềng kèm loại liên kết, ✓ và % giống nhau); bấm đúp hoặc “Mở ghi chú” → mở; ghi chú từ PDF có nút “Mở PDF”.
+  · Graph cục bộ: chỉ lân cận của ghi chú đang chọn/đang mở, độ sâu 1–3 bước.
 - Phím tắt: Ctrl+N mới, Ctrl+O mở nhanh, Ctrl+P bảng lệnh, Ctrl+G graph, Ctrl+E soạn/xem, Ctrl+, cài đặt.
 - Offline-first: SyncEngine ghi vào IndexedDB ngay, đẩy lên máy chủ có debounce kèm base_version, nhận sự kiện qua SSE (mục 12).
   Service worker chỉ lưu vỏ ứng dụng, không chặn /api.
@@ -141,6 +154,8 @@ Máy chủ là nguồn sự thật. Mỗi ghi chú có `version` tăng dần; m�
 - [x] Kiểm duyệt gợi ý liên kết (schema v5): links.status + bảng link_decisions, PUT /notes/{id}/links/{other_id}, nút ✓/✗ trong panel
   Liên kết, scripts/link_precision.py (precision theo τ từ nhãn ✓/✗).
   LƯU Ý ĐÁNH GIÁ: cạnh bị bỏ qua không còn được mở rộng khi truy hồi, nên số liệu run_eval sau khi bấm ✗ không còn so được trực tiếp với các lần chạy cũ.
+- [x] Graph view nâng cấp (màu thư mục, tìm 3 kiểu, lọc thẻ/loại liên kết, mật độ Ít/Vừa/Nhiều, hover, xem trước, local graph).
+  Chạy thật trong Chrome (React 19 + server thử dùng notes.py thật trên bản sao app.db, có gợi ý ✓/✗), kể cả màn hình điện thoại.
 - [ ] Việc còn lại: kiểm thử tay trên trình duyệt + điện thoại, chọn τ (sample_links), chấm tay chất lượng câu trả lời, thêm ghi chú đa chủ đề, deploy VPS (để sau).
 
 Ghi chú thiết kế:

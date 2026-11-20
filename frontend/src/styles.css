@@ -305,6 +305,45 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
 .pick-list button.active { background: var(--accent-bg); color: var(--accent); }
 .toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 60; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; max-width: 90vw; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); }
 
+select { font: inherit; color: inherit; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; max-width: 100%; }
+button.icon { border: 0; background: transparent; padding: 2px 6px; font-size: 13px; }
+/* ---------------------------------------------------------------- graph: tìm kiếm, bộ lọc, chú thích */
+.graph-section { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.graph-section:first-of-type { border-top: 0; padding-top: 0; }
+.graph-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.graph-search { display: flex; gap: 4px; align-items: center; }
+.graph-results .neighbor-list { max-height: 180px; overflow: auto; }
+.seg.small button { font-size: 12px; padding: 3px 8px; }
+.density { display: flex; flex-direction: column; gap: 4px; }
+.density-seg { display: flex; }
+.density-seg button { flex: 1; }
+.density-seg .count { font-size: 11px; opacity: 0.7; margin-left: 2px; }
+.advanced summary { cursor: pointer; }
+.advanced[open] { display: flex; flex-direction: column; gap: 4px; }
+.field { display: flex; align-items: center; gap: 6px; }
+.field select { flex: 1; min-width: 0; }
+.neighbor-list button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; }
+.neighbor-list button .badge { margin-left: auto; white-space: nowrap; flex: none; }
+.neighbor-list button .dot { flex: none; }
+.nl-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.neighbor-list button.active { background: var(--accent-bg); color: var(--accent); }
+.edge-wiki { stroke: var(--accent); stroke-width: 2; }
+.edge-sem { stroke: var(--edge); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.graph-legend { position: absolute; left: 10px; top: 10px; width: 220px; max-width: calc(100% - 20px); max-height: 40%; overflow: auto; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3); display: flex; flex-direction: column; gap: 4px; }
+.graph-legend.collapsed { width: auto; padding: 4px; }
+.graph-legend ul { list-style: none; margin: 0; padding: 0; }
+.graph-legend li button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; background: transparent; padding: 3px 4px; font-size: 12px; }
+.graph-legend li button:hover { background: var(--bg3); }
+.graph-legend li button.off { opacity: 0.4; text-decoration: line-through; }
+.legend-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shape { display: inline-block; width: 9px; height: 9px; background: var(--muted); }
+.shape.circle { border-radius: 50%; }
+.shape.square { border-radius: 2px; }
+.graph-card-actions button { padding: 4px 10px; font-size: 13px; }
+.graph-preview { font-size: 13px; line-height: 1.45; color: var(--fg); background: var(--bg); border-radius: 6px; padding: 6px 8px; max-height: 120px; overflow: auto; }
+button.chip { border: 0; padding: 2px 10px; font-size: 12px; }
+button.chip.active { background: var(--accent); color: #fff; }
+
 /* ---------------------------------------------------------------- điện thoại: sidebar thành ngăn kéo */
 @media (hover: none) {
   .folder-actions { opacity: 1; }
@@ -320,7 +359,9 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
   .editor-body.split { flex-direction: column; }
   .editor-body.split .edit-wrap { border-right: 0; border-bottom: 1px solid var(--border); }
   .editor, .read-pane { padding: 12px; }
-  .graph-controls { width: 230px; }
+  .graph-controls { width: 230px; max-height: 55%; }
+  .graph-legend { width: 170px; max-height: 30%; top: auto; bottom: 10px; }
+  .graph-card { z-index: 2; max-height: 45%; }
   .statusbar { gap: 8px; }
   .title-input { font-size: 15px; }
 }/* ---------------------------------------------------------------- cá bơi ở trang đăng nhập */
