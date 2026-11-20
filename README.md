@@ -26,7 +26,7 @@ python scripts/smoke_models.py
 
 ## Tạo user và nhập thư mục ghi chú
 ```
-python scripts/create_user.py alice
+python scripts/create_user.py alice --email alice@gmail.com
 python scripts/import_folder.py --user alice --dir "C:\duong\dan\thu_muc_ghi_chu"
 ```
 Tiêu đề ghi chú = tên file (không có đuôi), khớp với [[wiki-link]] kiểu Obsidian.

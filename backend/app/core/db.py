@@ -5,6 +5,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT NOT NULL UNIQUE,
+    email         TEXT,
     password_hash TEXT NOT NULL,
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -69,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(user_id, session_id)
 """
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # v6: anh dinh kem (dan/keo tha vao ghi chu, nhung bang ![[ten]]). Ten duy nhat theo user; file luu
 # o uploads/<user_id>/att/<uuid>.<duoi>, ten file tren dia do he thong dat (khong dung ten tu client).
@@ -218,6 +219,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE links SET status = 'accepted' WHERE type = 'wiki'")
     conn.executescript(MIGRATION_V5_LINKS)
     conn.executescript(MIGRATION_V6_ATTACHMENTS)
+    # v7: email (Gmail) cho tai khoan, dung de dat lai mat khau. Tai khoan cu co the chua co email.
+    if "email" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL")
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 

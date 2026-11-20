@@ -1,4 +1,4 @@
-"""Tao tai khoan: python scripts/create_user.py <username>   (chay tu thu muc backend)"""
+"""Tao tai khoan: python scripts/create_user.py <username> [--email ten@gmail.com]   (chay tu thu muc backend)"""
 import argparse
 import getpass
 import sys
@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from argon2 import PasswordHasher  # noqa: E402
 
+from app.api.routes import normalize_gmail  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import connect, init_db  # noqa: E402
 
@@ -15,7 +16,13 @@ from app.core.db import connect, init_db  # noqa: E402
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("username")
+    parser.add_argument("--email", help="Gmail cua tai khoan (dung cho quen mat khau)")
     args = parser.parse_args()
+    email = None
+    if args.email:
+        email = normalize_gmail(args.email)
+        if email is None:
+            sys.exit("Email phai dung dinh dang Gmail.")
 
     password = getpass.getpass("Mat khau: ")
     if len(password) < 6 or password != getpass.getpass("Nhap lai: "):
@@ -25,8 +32,8 @@ def main() -> None:
     init_db(conn)
     try:
         conn.execute(
-            "INSERT INTO users(username, password_hash) VALUES (?, ?)",
-            (args.username, PasswordHasher().hash(password)),
+            "INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?)",
+            (args.username, email, PasswordHasher().hash(password)),
         )
         conn.commit()
     except Exception as exc:  # noqa: BLE001

@@ -45,7 +45,7 @@ Chỉ cập nhật cạnh của phần thay đổi, không tính lại toàn b�
 Baseline so sánh: vector thuần (chỉ danh sách A).
 
 ## 6. API (tiền tố /api; Swagger tại /docs)
-Auth: GET /config (allow_registration, invite_required) | POST /auth/register {username, password≥8, invite_code?}
+Auth: GET /config (allow_registration, invite_required) | POST /auth/register {username, email (Gmail, duy nhất), password≥8, invite_code?} | POST /auth/reset-password {email, new_password≥8} (quên mật khẩu: email khớp tài khoản → đổi mật khẩu, quay về đăng nhập; sai email 5 lần/15 phút/IP thì chặn)
   → JWT | POST /auth/login (form username+password → JWT Bearer) | GET /me
   Đăng ký: tên 3–32 ký tự [A-Za-z0-9_.-], không phân biệt hoa/thường; tắt được bằng ALLOW_REGISTRATION=false,
   yêu cầu mã mời bằng INVITE_CODE. Giới hạn tốc độ trong bộ nhớ: đăng nhập sai 10 lần/5 phút (theo IP+tên) → 429;

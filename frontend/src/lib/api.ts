@@ -115,16 +115,34 @@ export async function login(base: string, username: string, password: string, ca
   return sessionFromToken(base, access_token);
 }
 
-export async function register(base: string, username: string, password: string, inviteCode?: string,
+export async function register(base: string, username: string, email: string, password: string, inviteCode?: string,
                                captchaToken?: string): Promise<Session> {
   const res = await doFetch(`${base}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, invite_code: inviteCode || null, captcha_token: captchaToken || null }),
+    body: JSON.stringify({ username, email, password, invite_code: inviteCode || null, captcha_token: captchaToken || null }),
   });
   if (!res.ok) throw await readError(res);
   const { access_token } = (await res.json()) as { access_token: string };
   return sessionFromToken(base, access_token);
+}
+
+/** Quên mật khẩu: email phải khớp tài khoản. Không tự đăng nhập; trả về tên đăng nhập để điền sẵn. */
+export async function resetPassword(base: string, email: string, newPassword: string,
+                                    captchaToken?: string): Promise<{ username: string }> {
+  const res = await doFetch(`${base}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, new_password: newPassword, captcha_token: captchaToken || null }),
+  });
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as { username: string };
+}
+
+/** Chỉ nhận Gmail (khớp kiểm tra ở backend). */
+export function isGmail(raw: string): boolean {
+  const e = raw.trim().toLowerCase();
+  return /^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?@gmail\.com$/.test(e) && !e.includes("..");
 }
 
 // ---------------------------------------------------------------- SSE

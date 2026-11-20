@@ -40,6 +40,7 @@ def create_app(settings: Settings | None = None, *, embedder=None, llm=None, sto
     app.state.locks = {}
     app.state.login_limiter = RateLimiter(limit=10, window=300)   # chi dem lan dang nhap SAI
     app.state.register_limiter = RateLimiter(limit=5, window=3600)
+    app.state.reset_limiter = RateLimiter(limit=5, window=900)     # chi dem lan nhap SAI email khi quen mat khau
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
     app.include_router(router)

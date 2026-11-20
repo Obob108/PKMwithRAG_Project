@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HttpApi, login, parseSseBlock, register } from "../src/lib/api.ts";
+import { HttpApi, isGmail, login, parseSseBlock, register, resetPassword } from "../src/lib/api.ts";
 import { ApiError, NetworkError } from "../src/lib/types.ts";
 import type { RemoteEvent } from "../src/lib/types.ts";
 
@@ -52,16 +52,27 @@ test("login and register build a session via /api/me", async () => {
   const s = await login("", "alice", "pw");
   assert.deepEqual(s, { token: "T", username: "alice", userId: 9 });
   assert.equal(calls[0].init.body, "username=alice&password=pw");
-  const r = await register("", "bob", "matkhau-dai", "ma");
+  const r = await register("", "bob", "bob@gmail.com", "matkhau-dai", "ma");
   assert.equal(r.token, "T");
-  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { username: "bob", password: "matkhau-dai", invite_code: "ma", captcha_token: null });
+  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { username: "bob", email: "bob@gmail.com", password: "matkhau-dai", invite_code: "ma", captcha_token: null });
   const c2 = stub((url) => url.endsWith("/api/me") ? json({ id: 9, username: "alice" }) : json({ access_token: "T", token_type: "bearer" }));
   await login("", "alice", "pw", "cap-tok");
   assert.equal(c2[0].init.body, "username=alice&password=pw&captcha_token=cap-tok");
-  await register("", "bob", "matkhau-dai", "", "cap-tok");
+  await register("", "bob", "bob@gmail.com", "matkhau-dai", "", "cap-tok");
   assert.equal(JSON.parse(String(c2[2].init.body)).captcha_token, "cap-tok");
   stub(() => json({ detail: "Sai tên đăng nhập hoặc mật khẩu" }, 401));
   await assert.rejects(() => login("", "a", "b"), (e: unknown) => e instanceof ApiError && e.detail.includes("Sai"));
+});
+
+test("resetPassword posts email + new password; isGmail only accepts Gmail", async () => {
+  const calls = stub(() => json({ username: "alice" }));
+  assert.deepEqual(await resetPassword("", "alice@gmail.com", "mat-khau-moi"), { username: "alice" });
+  assert.equal(calls[0].url, "/api/auth/reset-password");
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { email: "alice@gmail.com", new_password: "mat-khau-moi", captcha_token: null });
+  stub(() => json({ detail: "Email không khớp với tài khoản nào" }, 404));
+  await assert.rejects(() => resetPassword("", "x@gmail.com", "mat-khau-moi"), (e: unknown) => e instanceof ApiError && e.status === 404);
+  assert.ok(isGmail(" Ten.Ho@Gmail.com"));
+  for (const bad of ["a@yahoo.com", "a@gmail.co", ".a@gmail.com", "a..b@gmail.com", "agmail.com"]) assert.ok(!isGmail(bad), bad);
 });
 
 test("SSE block parsing", () => {

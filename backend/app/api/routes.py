@@ -55,12 +55,27 @@ class FolderIn(BaseModel):
 
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32)
+    email: str = Field(min_length=11, max_length=254)
     password: str = Field(min_length=8, max_length=128)
     invite_code: str | None = Field(default=None, max_length=128)
     captcha_token: str | None = Field(default=None, max_length=8192)
 
 
+class ResetPasswordRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=254)
+    new_password: str = Field(min_length=8, max_length=128)
+    captcha_token: str | None = Field(default=None, max_length=8192)
+
+
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+# Chi nhan dia chi Gmail: phan ten 1-64 ky tu (chu, so, . _ + -), khong bat dau/ket thuc bang dau cham.
+GMAIL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?@gmail\.com$")
+
+
+def normalize_gmail(raw: str) -> str | None:
+    """Tra ve email da chuan hoa (chu thuong, bo khoang trang) neu dung dinh dang Gmail, nguoc lai None."""
+    email = raw.strip().lower()
+    return email if GMAIL_RE.match(email) and ".." not in email else None
 
 
 class LinkStatusUpdate(BaseModel):
@@ -152,13 +167,39 @@ def register(body: RegisterRequest, request: Request, conn=Depends(get_conn)):
     username = body.username.strip()
     if not USERNAME_RE.match(username):
         raise HTTPException(status_code=422, detail="Tên đăng nhập chỉ gồm chữ không dấu, số, _ . -")
+    email = normalize_gmail(body.email)
+    if email is None:
+        raise HTTPException(status_code=422, detail="Email phải đúng định dạng Gmail (vd: ten@gmail.com)")
     if conn.execute("SELECT 1 FROM users WHERE lower(username) = lower(?)", (username,)).fetchone():
         raise HTTPException(status_code=409, detail="Tên đăng nhập đã tồn tại")
-    cur = conn.execute("INSERT INTO users(username, password_hash) VALUES (?, ?)",
-                       (username, hash_password(body.password)))
+    if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
+        raise HTTPException(status_code=409, detail="Email đã được dùng cho tài khoản khác")
+    cur = conn.execute("INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?)",
+                       (username, email, hash_password(body.password)))
     conn.commit()
     limiter.hit(key)
     return _token_for(request, cur.lastrowid)
+
+
+@router.post("/auth/reset-password")
+def reset_password(body: ResetPasswordRequest, request: Request, conn=Depends(get_conn)):
+    """Quen mat khau: nhap dung email cua tai khoan + mat khau moi thi doi mat khau.
+    Khong tu dang nhap: nguoi dung quay lai man dang nhap voi mat khau moi."""
+    limiter = request.app.state.reset_limiter
+    key = _client_ip(request)
+    if limiter.blocked(key):
+        raise HTTPException(status_code=429, detail="Nhập sai email quá nhiều lần, thử lại sau ít phút")
+    _check_captcha(request, body.captcha_token)
+    email = normalize_gmail(body.email)
+    row = conn.execute("SELECT id, username FROM users WHERE email = ?", (email,)).fetchone() if email else None
+    if row is None:
+        limiter.hit(key)
+        raise HTTPException(status_code=404, detail="Email không khớp với tài khoản nào")
+    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(body.new_password), row["id"]))
+    conn.commit()
+    # mo khoa dang nhap cho tai khoan nay (neu truoc do bi chan vi nhap sai nhieu lan)
+    request.app.state.login_limiter.reset(f"{key}|{row['username'].lower()}")
+    return {"username": row["username"]}
 
 
 @router.get("/me")

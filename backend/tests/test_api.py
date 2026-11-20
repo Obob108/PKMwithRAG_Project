@@ -20,8 +20,8 @@ def client(tmp_path):
     with TestClient(app) as c:
         conn = connect(settings.db_path)
         for name in ("alice", "bob"):
-            conn.execute("INSERT INTO users(username, password_hash) VALUES (?, ?)",
-                         (name, hash_password("pw-" + name)))
+            conn.execute("INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?)",
+                         (name, f"{name}@gmail.com", hash_password("pw-" + name)))
         conn.commit()
         conn.close()
         yield c
@@ -221,15 +221,44 @@ def test_upload_markdown(client):
 def test_config_and_register_flow(client):
     assert client.get("/api/config").json() == {"allow_registration": True, "invite_required": False,
                                                 "hcaptcha_sitekey": None}
-    r = client.post("/api/auth/register", json={"username": "carol", "password": "matkhau-dai"})
+    r = client.post("/api/auth/register", json={"username": "carol", "email": "carol@gmail.com", "password": "matkhau-dai"})
     assert r.status_code == 201
     h = {"Authorization": f"Bearer {r.json()['access_token']}"}
     assert client.get("/api/me", headers=h).json()["username"] == "carol"
     assert client.post("/api/auth/login", data={"username": "carol", "password": "matkhau-dai"}).status_code == 200
     # trung ten (khong phan biet hoa thuong), mat khau ngan, ky tu la
-    assert client.post("/api/auth/register", json={"username": "CAROL", "password": "matkhau-dai"}).status_code == 409
-    assert client.post("/api/auth/register", json={"username": "dave", "password": "ngan"}).status_code == 422
-    assert client.post("/api/auth/register", json={"username": "d a v e", "password": "matkhau-dai"}).status_code == 422
+    assert client.post("/api/auth/register", json={"username": "CAROL", "email": "carol2@gmail.com", "password": "matkhau-dai"}).status_code == 409
+    assert client.post("/api/auth/register", json={"username": "dave", "email": "dave@gmail.com", "password": "ngan"}).status_code == 422
+    assert client.post("/api/auth/register", json={"username": "d a v e", "email": "dave@gmail.com", "password": "matkhau-dai"}).status_code == 422
+
+
+def test_register_requires_unique_gmail(client):
+    def reg(username, email):
+        return client.post("/api/auth/register", json={"username": username, "email": email, "password": "matkhau-dai"})
+    assert reg("dave", "").status_code == 422
+    for bad in ("dave@yahoo.com", "dave@gmail.co", "dave gmail.com", ".dave@gmail.com", "da..ve@gmail.com"):
+        assert reg("dave", bad).status_code == 422, bad
+    assert client.post("/api/auth/register", json={"username": "dave", "password": "matkhau-dai"}).status_code == 422
+    assert reg("dave", "  Dave.Nguyen@Gmail.com ").status_code == 201
+    r = reg("dave2", "dave.nguyen@gmail.com")
+    assert r.status_code == 409 and "Email" in r.json()["detail"]
+
+
+def test_forgot_password_resets_with_matching_email(client):
+    r = client.post("/api/auth/reset-password", json={"email": "ALICE@gmail.com", "new_password": "mat-khau-moi"})
+    assert r.status_code == 200 and r.json() == {"username": "alice"}
+    assert client.post("/api/auth/login", data={"username": "alice", "password": "pw-alice"}).status_code == 401
+    assert client.post("/api/auth/login", data={"username": "alice", "password": "mat-khau-moi"}).status_code == 200
+    # email khong ton tai: khong doi gi; mat khau moi qua ngan: 422
+    assert client.post("/api/auth/reset-password", json={"email": "ai@gmail.com", "new_password": "mat-khau-moi"}).status_code == 404
+    assert client.post("/api/auth/reset-password", json={"email": "bob@gmail.com", "new_password": "ngan"}).status_code == 422
+    assert client.post("/api/auth/login", data={"username": "bob", "password": "pw-bob"}).status_code == 200
+
+
+def test_forgot_password_is_rate_limited(client):
+    for _ in range(5):
+        assert client.post("/api/auth/reset-password", json={"email": "x@gmail.com", "new_password": "mat-khau-moi"}).status_code == 404
+    assert client.post("/api/auth/reset-password", json={"email": "alice@gmail.com", "new_password": "mat-khau-moi"}).status_code == 429
 
 
 def test_register_disabled_and_invite_code(tmp_path):
@@ -238,11 +267,11 @@ def test_register_disabled_and_invite_code(tmp_path):
         return TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores()))
 
     with make(allow_registration=False) as c:
-        assert c.post("/api/auth/register", json={"username": "eve", "password": "matkhau-dai"}).status_code == 403
+        assert c.post("/api/auth/register", json={"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai"}).status_code == 403
     with make(invite_code="bi-mat") as c:
         assert c.get("/api/config").json()["invite_required"] is True
-        assert c.post("/api/auth/register", json={"username": "eve", "password": "matkhau-dai"}).status_code == 403
-        ok = c.post("/api/auth/register", json={"username": "eve", "password": "matkhau-dai", "invite_code": "bi-mat"})
+        assert c.post("/api/auth/register", json={"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai"}).status_code == 403
+        ok = c.post("/api/auth/register", json={"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai", "invite_code": "bi-mat"})
         assert ok.status_code == 201
 
 
@@ -290,11 +319,11 @@ def test_hcaptcha_required_for_login_and_register(tmp_path, monkeypatch):
     s = Settings(_env_file=None, data_dir=tmp_path, jwt_secret="t", hcaptcha_sitekey="site", hcaptcha_secret="sec")
     with TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores())) as c:
         assert c.get("/api/config").json()["hcaptcha_sitekey"] == "site"
-        reg = {"username": "eve", "password": "matkhau-dai"}
+        reg = {"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai"}
         assert c.post("/api/auth/register", json=reg).status_code == 400
         assert c.post("/api/auth/register", json={**reg, "captcha_token": "sai"}).status_code == 400
         assert c.post("/api/auth/register", json={**reg, "captcha_token": "ok-token"}).status_code == 201
-        form = {"username": "eve", "password": "matkhau-dai"}
+        form = {"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai"}
         assert c.post("/api/auth/login", data=form).status_code == 400
         assert c.post("/api/auth/login", data={**form, "captcha_token": "sai"}).status_code == 400
         assert c.post("/api/auth/login", data={**form, "captcha_token": "ok-token"}).status_code == 200

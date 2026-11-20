@@ -96,6 +96,10 @@ code { font-family: var(--mono); background: var(--code-bg); padding: 1px 4px; b
 .auth-tabs { display: flex; gap: 4px; background: var(--bg); padding: 3px; border-radius: 8px; }
 .auth-tabs button { flex: 1; border: 0; background: transparent; font-size: 20px;}
 .auth-tabs button.active { background: var(--accent-bg); color: var(--accent); font-size: 18px;}
+.auth-link { align-self: flex-start; border: 0; background: transparent; padding: 0; color: var(--accent); font-size: 14px; cursor: pointer; }
+.auth-link:hover { text-decoration: underline; }
+.auth-forgot { align-self: flex-end; margin-top: -4px; }
+.form-notice { color: var(--ok); background: rgba(80, 180, 120, 0.12); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
 .form-error { color: var(--danger); background: rgba(229, 87, 95, 0.12); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
 
 /* ---------------------------------------------------------------- khung */
