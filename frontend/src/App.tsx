@@ -232,6 +232,37 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     if (key) openPdf(key);
   }, [engine, openPdf]);
 
+  // ---------------------------------------------------------------- ảnh đính kèm
+  // Bộ nhớ đệm URL ảnh theo tên: chế độ chia đôi vẽ lại mỗi lần gõ phím, không được tải lại ảnh mỗi lần.
+  const imageCache = useRef(new Map<string, Promise<string>>());
+  useEffect(() => {
+    const cache = imageCache.current;
+    return () => {
+      for (const pr of cache.values()) pr.then((u) => URL.revokeObjectURL(u)).catch(() => undefined);
+      cache.clear();
+    };
+  }, []);
+  const loadImage = useCallback((name: string): Promise<string> => {
+    const cache = imageCache.current;
+    let pr = cache.get(name);
+    if (!pr) {
+      pr = api.fetchAttachment(name).then((b) => URL.createObjectURL(b));
+      pr.catch(() => cache.delete(name)); // lỗi (mất mạng...): lần sau thử lại
+      cache.set(name, pr);
+    }
+    return pr;
+  }, [api]);
+  const uploadImage = useCallback(async (file: File, suggestedName: string): Promise<string> => {
+    try {
+      const r = await api.uploadAttachment(file, suggestedName);
+      imageCache.current.set(r.name, Promise.resolve(URL.createObjectURL(file))); // hiện ngay, không cần tải lại
+      return r.name;
+    } catch (e) {
+      flash(e instanceof NetworkError ? "Cần kết nối máy chủ để dán ảnh." : e instanceof ApiError ? e.detail : "Không tải được ảnh lên.");
+      throw e;
+    }
+  }, [api, flash]);
+
   const newNote = useCallback((title?: string, content = "", folderId: number | null = null) => {
     const n = engine.create(uniqueTitle(notesRef.current, title?.trim() || "Chưa đặt tên"), content, folderId);
     openKey(n.key);
@@ -531,6 +562,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
                       onOpenTitle={openTitle} onOpenPdf={openPdf} onDelete={deleteNote} onRenamed={renamed}
                       onTag={(tag) => { setTagFilter(tag); setUi({ leftOpen: true, leftTab: "files" }); }}
                       folders={folders} onMove={moveNote}
+                      onUploadImage={uploadImage} loadImage={loadImage}
                       jump={shown ? jump : null}
                     />
                   )}

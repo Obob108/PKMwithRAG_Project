@@ -108,7 +108,14 @@ Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện tho
 - Offline-first: SyncEngine ghi vào IndexedDB ngay, đẩy lên máy chủ có debounce kèm base_version, nhận sự kiện qua SSE (mục 12).
   Service worker chỉ lưu vỏ ứng dụng, không chặn /api.
 Cấu trúc: src/lib (merge, engine, api, live, idb, text, markdown, graphModel: thuần TS, có test), src/components, src/App.tsx.
-Markdown hiển thị bằng AST tự viết, KHÔNG dùng innerHTML (không XSS từ nội dung ghi chú).
+Markdown hiển thị bằng AST tự viết, KHÔNG dùng innerHTML (không XSS từ nội dung ghi chú). Ngoại lệ duy nhất: HTML do KaTeX sinh
+cho công thức ($...$ trong dòng theo quy tắc Pandoc để "giá $5 và $10" vẫn là chữ; $$...$$ thành khối), KaTeX tự thoát ký tự và
+chạy với trust=false (không \href/\url/\html...). Công thức sai hiện chữ đỏ tại chỗ, không làm hỏng trang.
+Ảnh: dán (Ctrl+V) hoặc kéo thả ảnh vào editor → chèn dòng tạm "⏳ Đang tải ảnh lên…" → POST /attachments → thay bằng
+![[Pasted image YYYYMMDDHHmmss.png]] (kiểu Obsidian; ![[tên|300]] đặt độ rộng; ![mô tả](https://...) cho ảnh web). Máy chủ xác định
+loại ảnh bằng magic bytes (PNG/JPEG/GIF/WebP, không nhận SVG), tên duy nhất theo user, file đặt tên bằng uuid; GET
+/attachments/file?name= chỉ chủ sở hữu, kèm nosniff + CSP. ![[ảnh]] không tính là [[liên kết]] và bị bỏ khỏi văn bản embedding.
+Schema v6: bảng attachments. Giới hạn: dán ảnh cần mạng; xóa ghi chú không xóa ảnh (ảnh có thể dùng ở nhiều ghi chú).
 
 ## 8. Đánh giá (phần được chấm)
 - Truy hồi: 40–60 câu hỏi trên ghi chú thật (vi + en), có nhóm câu cần ghép nhiều ghi chú.

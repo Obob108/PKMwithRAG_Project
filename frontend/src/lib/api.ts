@@ -247,6 +247,19 @@ export class HttpApi implements Api {
     if (folderId !== null) form.append("folder_id", String(folderId));
     return this.json("POST", "/api/notes/upload", { form });
   }
+  /** Ảnh đính kèm (dán/kéo thả vào ghi chú). Máy chủ có thể đổi tên nếu trùng; trả về tên cuối cùng. */
+  uploadAttachment(file: Blob, name: string): Promise<{ name: string; mime: string; size: number }> {
+    const form = new FormData();
+    form.append("file", file, name);
+    form.append("name", name);
+    return this.json("POST", "/api/attachments", { form });
+  }
+  /** Ảnh đính kèm theo tên (kèm token; thẻ <img> không tự gửi header). */
+  async fetchAttachment(name: string): Promise<Blob> {
+    const res = await this.request("GET", `/api/attachments/file?name=${encodeURIComponent(name)}`);
+    if (!res.ok) throw await readError(res);
+    return await res.blob();
+  }
   /** PDF gốc, tải bằng fetch có token rồi hiển thị bằng blob URL (iframe không gửi được header). */
   async fetchFile(id: number): Promise<Blob> {
     const res = await this.request("GET", `/api/notes/${id}/file`);

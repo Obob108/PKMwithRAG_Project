@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from "react";
 import Markdown from "./Markdown.tsx";
 import type { SyncEngine } from "../lib/engine.ts";
 import { resolveConflicts } from "../lib/merge.ts";
@@ -23,6 +23,20 @@ interface Props {
   jump: { line: number; nonce: number } | null;
   folders: Folder[];
   onMove: (key: string, folderId: number | null) => void;
+  /** Tải ảnh lên máy chủ, trả về tên cuối cùng để chèn ![[tên]]. Lỗi thì ném (App đã báo cho người dùng). */
+  onUploadImage: (file: File, suggestedName: string) => Promise<string>;
+  loadImage: (name: string) => Promise<string>;
+}
+
+const IMAGE_MIME: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };
+
+/** Tên kiểu Obsidian: "Pasted image 20261120172700.png". */
+export function pastedImageName(file: File, now = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const ext = IMAGE_MIME[file.type] ?? "png";
+  const own = file.name && !/^image\.\w+$/i.test(file.name) ? file.name.replace(/\.[^.]+$/, "") : ""; // ảnh kéo từ máy: giữ tên gốc
+  return `${own || `Pasted image ${stamp}`}.${ext}`;
 }
 
 interface Autocomplete {
@@ -52,6 +66,58 @@ export default function EditorPane(p: Props) {
     lastLocal.current = value;
     setText(value);
     engine.edit(note.key, { content: value });
+  };
+
+  // ---------------------------------------------------------------- dán / kéo thả ảnh
+  /** Thay một đoạn chữ trong nội dung hiện tại, giữ nguyên vị trí con trỏ của người dùng. */
+  const replaceText = (token: string, replacement: string) => {
+    const cur = lastLocal.current;
+    const at = cur.indexOf(token);
+    if (at < 0) return;
+    const ta = taRef.current;
+    const focused = ta !== null && document.activeElement === ta;
+    let [s0, s1] = ta ? [ta.selectionStart, ta.selectionEnd] : [0, 0];
+    const delta = replacement.length - token.length;
+    if (s0 > at) s0 = Math.max(at, s0 + delta);
+    if (s1 > at) s1 = Math.max(at, s1 + delta);
+    commit(cur.slice(0, at) + replacement + cur.slice(at + token.length));
+    if (focused) requestAnimationFrame(() => taRef.current?.setSelectionRange(s0, s1));
+  };
+
+  const insertImages = (files: File[]): boolean => {
+    const ta = taRef.current;
+    const images = files.filter((f) => f.type in IMAGE_MIME);
+    if (!ta || images.length === 0) return false;
+    const jobs = images.map((f, k) => ({
+      file: f, name: pastedImageName(f, new Date(Date.now() + k * 1000)),
+      token: `⏳ Đang tải ảnh lên… (${Math.random().toString(36).slice(2, 8)})`,
+    }));
+    const { selectionStart: s0, selectionEnd: s1, value } = ta;
+    const before = value.slice(0, s0);
+    const lead = before && !before.endsWith("\n") ? "\n" : "";
+    const block = lead + jobs.map((j) => j.token).join("\n") + "\n";
+    commit(before + block + value.slice(s1));
+    select(s0 + block.length, s0 + block.length);
+    for (const j of jobs) {
+      p.onUploadImage(j.file, j.name)
+        .then((finalName) => replaceText(j.token, `![[${finalName}]]`))
+        .catch(() => replaceText(j.token + "\n", "")); // lỗi: bỏ dòng tạm (App đã báo lỗi)
+    }
+    return true;
+  };
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.files);
+    if (files.some((f) => f.type in IMAGE_MIME)) {
+      e.preventDefault();
+      insertImages(files);
+    }
+  };
+  const onDropFiles = (e: DragEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.some((f) => f.type in IMAGE_MIME)) return; // file khác: để App xử lý như cũ
+    e.preventDefault();
+    e.stopPropagation();
+    insertImages(files);
   };
 
   const select = (from: number, to: number) => {
@@ -237,9 +303,11 @@ export default function EditorPane(p: Props) {
         {showEdit && (
           <div className="edit-wrap">
             <textarea ref={taRef} className="editor" value={text} spellCheck={false} style={{ fontSize: p.fontSize }}
-                      placeholder="Bắt đầu viết… Dùng [[ để liên kết tới ghi chú khác, #thẻ để gắn thẻ."
+                      placeholder="Bắt đầu viết… Dùng [[ để liên kết tới ghi chú khác, #thẻ để gắn thẻ, $công thức$, dán ảnh bằng Ctrl+V."
                       onChange={(e) => { commit(e.target.value); refreshAc(e.target.value, e.target.selectionStart); }}
                       onKeyDown={onKeyDown}
+                      onPaste={onPaste} onDrop={onDropFiles}
+                      onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }}
                       onClick={(e) => refreshAc(e.currentTarget.value, e.currentTarget.selectionStart)}
                       onBlur={() => setTimeout(() => setAc(null), 150)} />
             {ac && (
@@ -254,7 +322,7 @@ export default function EditorPane(p: Props) {
         )}
         {showRead && (
           <div className="read-pane" ref={readRef} style={{ fontSize: p.fontSize }}>
-            <Markdown text={text} exists={p.exists} onWikiLink={p.onOpenTitle} onTag={p.onTag} />
+            <Markdown text={text} exists={p.exists} onWikiLink={p.onOpenTitle} onTag={p.onTag} loadImage={p.loadImage} />
           </div>
         )}
       </div>

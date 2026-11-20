@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from ..core import captcha
 from ..core.db import connect
 from ..core.security import create_token, hash_password, verify_password
+from ..services import attachments as att_svc
 from ..services import notes as notes_svc
 from ..services.indexer import delete_note as delete_note_index
 from ..services.indexer import index_note
@@ -226,6 +227,34 @@ def upload_note(request: Request, background: BackgroundTasks, file: UploadFile 
         raise
     background.add_task(run_index, request.app, user["id"], note["id"])
     return note
+
+
+# ------------------------------------------------------------------ anh dinh kem (![[ten.png]])
+@router.post("/attachments", status_code=201)
+def upload_attachment(request: Request, file: UploadFile = File(...), name: str = Form(default=""),
+                      user: dict = Depends(current_user), conn=Depends(get_conn)):
+    s = request.app.state.settings
+    limit = s.max_upload_mb * 1024 * 1024
+    data = file.file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"Ảnh lớn hơn {s.max_upload_mb} MB")
+    try:
+        return att_svc.save(conn, user["id"], s.upload_dir, data, name or file.filename or "")
+    except att_svc.BadImage:
+        raise HTTPException(status_code=415, detail="Chỉ hỗ trợ ảnh PNG, JPEG, GIF hoặc WebP")
+
+
+@router.get("/attachments/file")
+def get_attachment(request: Request, name: str = Query(..., min_length=1, max_length=300),
+                   user: dict = Depends(current_user), conn=Depends(get_conn)):
+    try:
+        path, mime = att_svc.get(conn, user["id"], request.app.state.settings.upload_dir, name)
+    except att_svc.NotFound:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ảnh")
+    return FileResponse(path, media_type=mime, headers={
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400",
+        "Content-Security-Policy": "default-src 'none'",
+    })
 
 
 @router.get("/notes/{note_id}/file")

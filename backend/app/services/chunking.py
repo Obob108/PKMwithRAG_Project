@@ -10,6 +10,9 @@ from dataclasses import dataclass
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 WIKILINK_RE = re.compile(r"\[\[([^\[\]|#]+?)(?:[#|][^\[\]]*)?\]\]")
+# ![[anh.png]] la anh dinh kem, khong phai lien ket toi ghi chu; bo khoi van ban dua vao embedding.
+IMAGE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp)$", re.IGNORECASE)
+IMAGE_EMBED_RE = re.compile(r"!\[\[[^\[\]\n]+?\.(?:png|jpe?g|gif|webp)(?:\|\d+)?\]\]", re.IGNORECASE)
 SENTENCE_RE = re.compile(r"(?<=[.!?。])\s+")
 PARAGRAPH_RE = re.compile(r"\n\s*\n")
 
@@ -22,7 +25,8 @@ class Chunk:
 
     def embed_text(self) -> str:
         """Van ban dua vao model embedding: them heading de co ngu canh."""
-        return f"{self.heading}\n{self.text}" if self.heading else self.text
+        text = IMAGE_EMBED_RE.sub("", self.text)
+        return f"{self.heading}\n{text}" if self.heading else text
 
 
 def extract_wikilinks(text: str) -> list[str]:
@@ -30,6 +34,8 @@ def extract_wikilinks(text: str) -> list[str]:
     titles: list[str] = []
     for m in WIKILINK_RE.finditer(text):
         title = m.group(1).strip()
+        if m.start() > 0 and text[m.start() - 1] == "!" and IMAGE_EXT_RE.search(title):
+            continue  # anh nhung, khong phai lien ket
         if title and title not in titles:
             titles.append(title)
     return titles

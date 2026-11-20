@@ -69,7 +69,22 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(user_id, session_id)
 """
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+# v6: anh dinh kem (dan/keo tha vao ghi chu, nhung bang ![[ten]]). Ten duy nhat theo user; file luu
+# o uploads/<user_id>/att/<uuid>.<duoi>, ten file tren dia do he thong dat (khong dung ten tu client).
+MIGRATION_V6_ATTACHMENTS = """
+CREATE TABLE IF NOT EXISTS attachments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    file_path  TEXT NOT NULL,
+    mime       TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, name)
+);
+"""
 
 # v2: phien ban ghi chu (de gop ba chieu) + nhat ky su kien (de dong bo truc tiep).
 MIGRATION_V2 = """
@@ -202,6 +217,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )
         conn.execute("UPDATE links SET status = 'accepted' WHERE type = 'wiki'")
     conn.executescript(MIGRATION_V5_LINKS)
+    conn.executescript(MIGRATION_V6_ATTACHMENTS)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 

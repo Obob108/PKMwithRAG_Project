@@ -7,11 +7,19 @@ export function fold(s: string): string {
 
 const WIKI_RE = /\[\[([^\[\]|#]+?)(?:[#|][^\[\]]*)?\]\]/g; // cùng quy tắc với backend
 
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+
+/** ![[ảnh.png]] là ảnh đính kèm (không phải liên kết tới ghi chú); ![[Ghi chú]] vẫn tính là liên kết. */
+export function isImageEmbed(text: string, index: number, target: string): boolean {
+  return index > 0 && text[index - 1] === "!" && IMAGE_EXT.test(target);
+}
+
 export function extractWikiLinks(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(WIKI_RE)) {
     const t = m[1].trim();
-    if (t && !out.includes(t)) out.push(t);
+    if (!t || isImageEmbed(text, m.index ?? 0, t)) continue;
+    if (!out.includes(t)) out.push(t);
   }
   return out;
 }

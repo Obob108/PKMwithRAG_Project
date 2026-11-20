@@ -334,3 +334,19 @@ def test_folders_over_http(client):
     feed = client.get("/api/sync/changes", params={"since": 0}, headers=h).json()["events"]
     assert feed[-1]["type"] == "folder"
 
+
+
+def test_attachments_api(client):
+    h = login(client)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    r = client.post("/api/attachments", headers=h, files={"file": ("image.png", png, "image/png")},
+                    data={"name": "Pasted image 20261120172700.png"})
+    assert r.status_code == 201, r.text
+    name = r.json()["name"]
+    g = client.get("/api/attachments/file", params={"name": name}, headers=h)
+    assert g.status_code == 200 and g.content == png and g.headers["content-type"] == "image/png"
+    assert g.headers["x-content-type-options"] == "nosniff"
+    assert client.get("/api/attachments/file", params={"name": name}, headers=login(client, "bob")).status_code == 404
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+    bad = client.post("/api/attachments", headers=h, files={"file": ("x.png", svg, "image/png")})
+    assert bad.status_code == 415

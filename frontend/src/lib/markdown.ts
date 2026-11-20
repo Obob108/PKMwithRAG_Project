@@ -1,6 +1,10 @@
 // Bộ phân tích Markdown nhỏ, an toàn: sinh cây AST (React dựng phần tử, KHÔNG dùng innerHTML nên không có XSS).
 // Hỗ trợ: tiêu đề, đoạn, danh sách (lồng nhau, đánh số, việc cần làm), trích dẫn + callout kiểu Obsidian, khối code,
-// bảng, đường kẻ, đậm/nghiêng/gạch ngang/mã, liên kết http(s)/mailto, [[wiki-link]], #thẻ.
+// bảng, đường kẻ, đậm/nghiêng/gạch ngang/mã, liên kết http(s)/mailto, [[wiki-link]], #thẻ,
+// công thức LaTeX ($...$ trong dòng, $$...$$ thành khối) và ảnh (![[ảnh.png]] kiểu Obsidian, ![mô tả](https://...)).
+
+/** Đuôi file ảnh: ![[x.png]] là ảnh đính kèm, không phải liên kết tới ghi chú. */
+export const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 
 export type Inline =
   | { t: "text"; s: string }
@@ -8,7 +12,9 @@ export type Inline =
   | { t: "strong" | "em" | "del"; c: Inline[] }
   | { t: "link"; href: string; c: Inline[] }
   | { t: "wiki"; target: string; alias: string }
-  | { t: "tag"; tag: string };
+  | { t: "tag"; tag: string }
+  | { t: "math"; tex: string }
+  | { t: "image"; name: string | null; src: string | null; alt: string; width: number | null };
 
 export interface ListItem {
   checked: boolean | null;
@@ -20,6 +26,7 @@ export type Block =
   | { t: "heading"; level: number; c: Inline[]; line: number }
   | { t: "p"; c: Inline[] }
   | { t: "code"; lang: string; s: string }
+  | { t: "math"; tex: string }
   | { t: "hr" }
   | { t: "quote"; c: Block[] }
   | { t: "callout"; kind: string; title: Inline[]; c: Block[] }
@@ -40,7 +47,7 @@ export function parseInline(text: string): Inline[] {
     const ch = text[i];
     const rest = text.slice(i);
     let m: RegExpMatchArray | null;
-    if (ch === "\\" && i + 1 < text.length && /[\\`*_{}\[\]()#+\-.!~|>]/.test(text[i + 1])) {
+    if (ch === "\\" && i + 1 < text.length && /[\\`*_{}\[\]()#+\-.!~|>$]/.test(text[i + 1])) {
       buf += text[i + 1];
       i += 2;
       continue;
@@ -48,6 +55,36 @@ export function parseInline(text: string): Inline[] {
     if (ch === "`" && (m = rest.match(/^`([^`\n]+)`/))) {
       flush();
       out.push({ t: "code", s: m[1] });
+      i += m[0].length;
+      continue;
+    }
+    if (ch === "!") {
+      // ![[ảnh.png]] hoặc ![[ảnh.png|300]] (độ rộng px, như Obsidian)
+      if ((m = rest.match(/^!\[\[([^\[\]|\n]+?)(?:\|(\d{1,4}))?\]\]/)) && IMAGE_EXT_RE.test(m[1].trim())) {
+        flush();
+        out.push({ t: "image", name: m[1].trim(), src: null, alt: m[1].trim(), width: m[2] ? Number(m[2]) : null });
+        i += m[0].length;
+        continue;
+      }
+      if ((m = rest.match(/^!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/))) {
+        flush();
+        out.push({ t: "image", name: null, src: m[2], alt: m[1], width: null });
+        i += m[0].length;
+        continue;
+      }
+    }
+    if (ch === "$" && text[i + 1] !== "$" && (m = rest.match(/^\$(?=\S)((?:\\.|[^$\\\n])*?\S)\$(?!\d)/))) {
+      // Quy tắc kiểu Pandoc: sau $ mở và trước $ đóng không có khoảng trắng, $ đóng không dính số
+      // => "giá $5 và $10" vẫn là chữ thường.
+      flush();
+      out.push({ t: "math", tex: m[1] });
+      i += m[0].length;
+      continue;
+    }
+    if (ch === "$" && (m = rest.match(/^\$\$(?=\S)([^\n]*?\S)\$\$/))) {
+      // $$...$$ nằm giữa dòng: vẫn coi là công thức (hiện trong dòng)
+      flush();
+      out.push({ t: "math", tex: m[1] });
       i += m[0].length;
       continue;
     }
@@ -103,6 +140,7 @@ export function parseInline(text: string): Inline[] {
 }
 
 const FENCE_RE = /^(\s*)(`{3,}|~{3,})\s*(.*)$/;
+const MATH_OPEN_RE = /^\s{0,3}\$\$/;
 const HEADING_RE = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
 const HR_RE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const QUOTE_RE = /^\s{0,3}>/;
@@ -118,7 +156,7 @@ function splitRow(line: string): string[] {
 
 function isBlockStart(lines: string[], i: number): boolean {
   const l = lines[i];
-  return FENCE_RE.test(l) || HEADING_RE.test(l) || HR_RE.test(l) || QUOTE_RE.test(l) || LIST_RE.test(l) ||
+  return FENCE_RE.test(l) || MATH_OPEN_RE.test(l) || HEADING_RE.test(l) || HR_RE.test(l) || QUOTE_RE.test(l) || LIST_RE.test(l) ||
     (l.includes("|") && i + 1 < lines.length && TABLE_SEP_RE.test(lines[i + 1]));
 }
 
@@ -173,6 +211,36 @@ export function parseBlocks(lines: string[], lineOffset: number): Block[] {
       while (i < lines.length && !closer.test(lines[i])) body.push(lines[i++]);
       i++; // dòng đóng (nếu có)
       blocks.push({ t: "code", lang, s: body.join("\n") });
+      continue;
+    }
+    if (MATH_OPEN_RE.test(line)) {
+      // Khối công thức: "$$ ... $$" trên một dòng, hoặc mở "$$" và đóng ở dòng có "$$" cuối.
+      const first = line.trim().slice(2);
+      if (first.endsWith("$$") && first.length >= 2) {
+        blocks.push({ t: "math", tex: first.slice(0, -2).trim() });
+        i++;
+        continue;
+      }
+      const start = i;
+      const body: string[] = first.trim() ? [first] : [];
+      i++;
+      let closed = false;
+      while (i < lines.length) {
+        const tt = lines[i].trimEnd();
+        if (tt.endsWith("$$")) {
+          const last = tt.slice(0, -2);
+          if (last.trim()) body.push(last);
+          closed = true;
+          i++;
+          break;
+        }
+        body.push(lines[i++]);
+      }
+      if (closed) blocks.push({ t: "math", tex: body.join("\n").trim() });
+      else {
+        i = start + 1; // thiếu $$ đóng: dòng mở hiện như chữ thường, phần sau phân tích bình thường
+        blocks.push({ t: "p", c: parseInline(line) });
+      }
       continue;
     }
     if ((m = line.match(HEADING_RE))) {
