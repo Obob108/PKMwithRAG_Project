@@ -1,41 +1,47 @@
 /* Giao diện kiểu Obsidian: [công cụ + sidebar trái] | tab + editor | sidebar phải | thanh trạng thái */
 :root {
-  --bg: #1e1e1e;
-  --bg2: #262626;
-  --bg3: #2f2f2f;
-  --border: #3a3a3a;
-  --fg: #dcddde;
-  --muted: #8f9092;
-  --accent: #8b7cf6;
-  --accent-bg: rgba(139, 124, 246, 0.18);
-  --danger: #e5575f;
-  --warn: #e0a93b;
-  --ok: #4cc38a;
-  --node-md: #8b9cff;
-  --node-pdf: #f08a5d;
-  --edge: #8a8a96;
-  --code-bg: #2b2b2b;
+  /* tối = đêm lo-fi: nâu ấm, chữ màu kem, điểm nhấn đất nung (thay cho xám lạnh + tím) */
+  --bg: #221b18;
+  --bg2: #2a221e;
+  --bg3: #372c26;
+  --border: #463930;
+  --fg: #eee2d0;
+  --muted: #a8968a;
+  --accent: #e3a07f;
+  --accent-bg: rgba(227, 160, 127, 0.16);
+  --danger: #e7766d;
+  --warn: #e8bb5c;
+  --ok: #9cc27a;
+  --node-md: #d9a3a3;
+  --node-pdf: #e3a07f;
+  --edge: #8f7e72;
+  --code-bg: #2f2622;
+  --paper-dots: rgba(255, 230, 200, 0.045);
+  --sage: #a3b37a;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
   color-scheme: dark;
 }
 :root[data-theme="light"] {
-  --bg: #ffffff;
-  --bg2: #f4f4f6;
-  --bg3: #e9e9ee;
-  --border: #d8d8de;
-  --fg: #2a2a2e;
-  --muted: #6b6b75;
-  --accent: #6c5ce7;
-  --accent-bg: rgba(108, 92, 231, 0.12);
-  --danger: #d1343e;
-  --warn: #b57a00;
-  --ok: #1d9b62;
-  --node-md: #5468e0;
-  --node-pdf: #d9622b;
-  --edge: #9a9aa6;
-  --code-bg: #efeff3;
+  /* sáng = buổi sáng cottagecore: giấy kem, chữ nâu mực, điểm nhấn đất nung */
+  --bg: #fbf6ee;
+  --bg2: #f3eadc;
+  --bg3: #e9dcc8;
+  --border: #dccbb3;
+  --fg: #4a3d33;
+  --muted: #8a7a6b;
+  --accent: #b9684f;
+  --accent-bg: rgba(185, 104, 79, 0.13);
+  --danger: #c2453d;
+  --warn: #a8720a;
+  --ok: #5d8a3a;
+  --node-md: #b5838d;
+  --node-pdf: #c97b63;
+  --edge: #a8968a;
+  --code-bg: #efe4d3;
+  --paper-dots: rgba(120, 90, 60, 0.07);
+  --sage: #7d8e4f;
   color-scheme: light;
 }
 
@@ -456,7 +462,8 @@ button.chip.active { background: var(--accent); color: #fff; }
 .primary-card { background: var(--h-terra); border-color: var(--h-terra); color: #fff8ef; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.12), 0 8px 16px var(--h-shadow); }
 .primary-card kbd { color: #fff3e3; border-color: rgba(255, 255, 255, 0.4); }
 .primary-card:hover:not(:disabled) { border-color: var(--h-terra); filter: brightness(1.05); }
-.home-columns { display: grid; grid-template-columns: 1fr 260px; gap: 16px; align-items: start; }
+.home-inner { container-type: inline-size; }
+.home-columns { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 16px; align-items: start; }
 .home h2 { font-family: var(--serif); font-size: 18px; font-weight: 600; margin: 4px 0 10px; }
 .home-recent ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .recent-card {
@@ -531,3 +538,47 @@ button.chip.active { background: var(--accent); color: #fff; }
   .home-columns { grid-template-columns: 1fr; }
   .home-note { transform: none; }
 }
+
+
+/* ---------------------------------------------------------------- khung app phong cách lo-fi (hai thanh bên, thanh tab, trạng thái) */
+.left-col, .sidebar.right {
+  background:
+    radial-gradient(var(--paper-dots) 1px, transparent 1.2px) 0 0 / 16px 16px,
+    linear-gradient(180deg, var(--bg2), color-mix(in srgb, var(--bg2) 88%, var(--accent) 12%));
+}
+.left-col > .sidebar { background: transparent; position: relative; }
+.tabbar, .statusbar { background: color-mix(in srgb, var(--bg2) 94%, var(--accent) 6%); }
+.side-tabs button { font-family: var(--serif); font-size: 15px; letter-spacing: 0.2px; }
+.side-tabs button.active { color: var(--accent); font-weight: 600; }
+.sidebar h4, .panel h4 { font-family: var(--serif); font-weight: 600; font-size: 14px; color: var(--fg); }
+.tab { border-radius: 10px 10px 0 0; margin-top: 4px; border-right: 0; }
+.tab.active { background: var(--bg); border-top-color: var(--accent); box-shadow: 0 -1px 0 var(--border), 1px 0 0 var(--border), -1px 0 0 var(--border); }
+.file-item, .row { border-radius: 8px; transition: background 0.12s ease; }
+.file-item.active { background: color-mix(in srgb, var(--bg) 70%, var(--accent) 30%); color: var(--fg); box-shadow: inset 3px 0 0 var(--accent); }
+.folder-head { font-family: var(--serif); }
+.badge { background: color-mix(in srgb, var(--bg3) 80%, var(--accent) 20%); }
+.msg { border-radius: 14px; background: var(--bg3); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12); }
+.msg.assistant { border-bottom-left-radius: 4px; background: color-mix(in srgb, var(--bg3) 85%, var(--sage) 15%); }
+.msg.user { border-bottom-right-radius: 4px; background: color-mix(in srgb, var(--bg3) 70%, var(--accent) 30%); }
+.chat-input textarea { border-radius: 12px; }
+.statusbar { font-family: var(--serif); font-style: italic; }
+.resizer { background: transparent; border-left: 1px solid var(--border); width: 4px; opacity: 1; }
+
+/* chậu cây nhỏ cuối thanh trái + ô trống có tách trà */
+.cozy-plant { flex: none; display: block; width: 104px; height: 78px; margin: 0 0 2px 10px; pointer-events: none; opacity: 0.85; }
+.cozy-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 28px 16px; color: var(--muted); font-family: var(--serif); font-style: italic; line-height: 1.5; }
+.cozy-empty svg { width: 72px; height: 54px; }
+.cz-shelf { stroke: var(--border); stroke-width: 3; stroke-linecap: round; }
+.cz-leaf { fill: var(--sage); }
+.cz-vine { stroke: var(--sage); stroke-width: 2; }
+.cz-pot { fill: var(--accent); opacity: 0.9; }
+.cz-book.a { fill: var(--sage); opacity: 0.85; }
+.cz-book.b { fill: var(--node-md); }
+.cz-cup { fill: var(--fg); opacity: 0.85; }
+.cz-handle { stroke: var(--fg); opacity: 0.85; stroke-width: 3; }
+.cz-steam path { fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; opacity: 0; animation: steam 3.6s ease-in-out infinite; }
+.cz-steam path:nth-child(2) { animation-delay: 1.4s; }
+.cz-sway { animation: sway 7s ease-in-out infinite alternate; }
+@media (prefers-reduced-motion: reduce) { .cz-steam path, .cz-sway { animation: none; } .cz-steam path { opacity: 0.5; } }
+@media (max-height: 600px) { .cozy-plant { display: none; } }
+@container (max-width: 640px) { .home-columns { grid-template-columns: minmax(0, 1fr); } .home-note { transform: none; } }

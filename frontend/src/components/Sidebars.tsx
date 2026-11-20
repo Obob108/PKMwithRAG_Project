@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CozyEmpty, PlantCorner } from "./Cozy.tsx";
 import type { DragEvent, ReactNode } from "react";
 import type { ChatSource, ExplainSide, HttpApi, LinkExplanation, LinkStatus, RelatedItem, SearchHit } from "../lib/api.ts";
 import { highlightParts, searchNotes, sharedTerms } from "../lib/text.ts";
@@ -58,6 +59,7 @@ export function LeftSidebar(p: LeftProps) {
           ))}
         </div>
       )}
+      <PlantCorner />
     </aside>
   );
 }
@@ -346,7 +348,7 @@ export function RightSidebar(p: RightProps) {
       {p.tab === "links" && <LinksPanel {...p} />}
       {p.tab === "outline" && (
         <div className="panel">
-          {!p.note && <div className="muted pad">Mở một ghi chú để xem dàn ý.</div>}
+          {!p.note && <CozyEmpty text="Mở một ghi chú để xem dàn ý." />}
           {p.note && p.outline.length === 0 && <div className="muted pad">Ghi chú chưa có tiêu đề (#, ##…).</div>}
           {p.outline.map((o, i) => (
             <button key={i} className="row outline" style={{ paddingLeft: 8 + (o.level - 1) * 14 }} onClick={() => p.onJump(o.line)}>{o.text}</button>
@@ -425,7 +427,7 @@ function LinksPanel(p: RightProps) {
     loadExplain(otherId);
   };
 
-  if (!note) return <div className="panel"><div className="muted pad">Mở một ghi chú để xem các liên kết của nó.</div></div>;
+  if (!note) return <div className="panel"><CozyEmpty text="Mở một ghi chú để xem các liên kết của nó." /></div>;
 
   const back = (p.linkIndex.backlinks.get(note.key) ?? []).map((k) => byKey.get(k)).filter((x): x is LocalNote => !!x);
   const out = p.linkIndex.outgoing.get(note.key) ?? [];
@@ -564,7 +566,7 @@ function ChatPanel({ messages, busy, useGraph, setUseGraph, onAsk, onClear, onli
   return (
     <div className="panel chat">
       <div className="chat-list" ref={listRef}>
-        {messages.length === 0 && <div className="muted pad">Hỏi bất kỳ điều gì về ghi chú của bạn. Câu trả lời chỉ dựa trên ghi chú và có ghi nguồn.</div>}
+        {messages.length === 0 && <CozyEmpty text="Hỏi bất kỳ điều gì về ghi chú của bạn. Câu trả lời chỉ dựa trên ghi chú và có ghi nguồn." />}
         {messages.map((m) => (
           <div key={m.id} className={"msg " + m.role}>
             <div className="msg-text">{m.text}</div>

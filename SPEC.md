@@ -78,6 +78,9 @@ Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện tho
   tách trà bốc hơi), sáng = buổi sáng nắng ấm, tối = đêm lo-fi có trăng sao; lời chào theo giờ + tên người dùng, ngày tháng,
   số ghi chú/thư mục/thẻ, các thao tác chính, 5 ghi chú gần đây (giấy vở), “mẩu nhỏ hôm nay” đổi theo ngày. Tôn trọng
   prefers-reduced-motion.
+- Bảng màu chung theo tông lo-fi ấm (thay xám lạnh + tím): tối = nâu ấm/kem/đất nung, sáng = giấy kem/nâu mực. Hai thanh bên có
+  nền giấy chấm, chữ serif cho tab, chậu cây nhỏ cuối thanh trái, ô trống có tách trà. Thanh bên phải luôn đóng khi đăng nhập /
+  mở ứng dụng (không lưu trạng thái mở), chỉ mở khi người dùng bấm và giữ mở đến khi họ tự đóng.
 - Sidebar trái: Tệp (cây thư mục một cấp: tạo/đổi tên/xóa, kéo thả ghi chú vào/ra thư mục, kéo file từ máy thả vào thư mục để tải lên; sắp xếp, lọc theo thẻ), Tìm kiếm (từ khóa trên máy + tìm ngữ nghĩa qua API), Thẻ.
 - Sidebar phải: Liên kết (backlink, liên kết đi, [[chưa tạo]], ghi chú liên quan tự động kèm điểm và nút ✓ chấp nhận / ✗ bỏ qua,
   mục "Đã bỏ qua" có nút hoàn tác; di chuột vào gợi ý hoặc bấm ô % để xem lý do: tối đa 3 cặp đoạn giống nhất kèm cosine,

@@ -126,7 +126,8 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
   const online = live.state === "live";
   const notes = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const folders = useSyncExternalStore(engine.subscribe, engine.getFolders);
-  const [ui, setUiState] = useState<UiState>(loadUi);
+  // Thanh bên phải luôn đóng khi vừa đăng nhập / mở ứng dụng; chỉ mở khi người dùng bấm, và giữ mở đến khi họ tự đóng.
+  const [ui, setUiState] = useState<UiState>(() => ({ ...loadUi(), rightOpen: false }));
   const setUi = useCallback((patch: Partial<UiState>) => setUiState((u) => ({ ...u, ...patch })), []);
   useEffect(() => {
     saveUi(ui);
