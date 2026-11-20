@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Icon } from "./components/Icons.tsx";
 import type { PointerEvent as RPointerEvent, ReactNode } from "react";
 import AuthScreen from "./components/AuthScreen.tsx";
 import { StatusBar, TabBar, Toolbar, UserMenu } from "./components/Chrome.tsx";
@@ -458,10 +459,10 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
   };
   const quickTools = !narrow && (
     <div className="quick-tools">
-      <button className="tool-btn" title="Ghi chú mới (Ctrl+N)" aria-label="Ghi chú mới" onClick={() => newNote()}>✚</button>
-      <button className="tool-btn" title="Mở nhanh (Ctrl+O)" aria-label="Mở nhanh" onClick={() => setDialog("switcher")}>🔎</button>
-      <button className={"tool-btn" + (active?.kind === "graph" ? " active" : "")} title="Graph view (Ctrl+G)" aria-label="Graph view" onClick={openGraph}>🕸</button>
-      <button className="tool-btn" title="Hỏi đáp trên ghi chú" aria-label="Hỏi đáp" onClick={openChat}>💬</button>
+      <button className="tool-btn" title="Ghi chú mới (Ctrl+N)" aria-label="Ghi chú mới" onClick={() => newNote()}><Icon name="new" /></button>
+      <button className="tool-btn" title="Mở nhanh (Ctrl+O)" aria-label="Mở nhanh" onClick={() => setDialog("switcher")}><Icon name="search" /></button>
+      <button className={"tool-btn" + (active?.kind === "graph" ? " active" : "")} title="Graph view (Ctrl+G)" aria-label="Graph view" onClick={openGraph}><Icon name="graph" /></button>
+      <button className="tool-btn" title="Hỏi đáp trên ghi chú" aria-label="Hỏi đáp" onClick={openChat}><Icon name="chat" /></button>
     </div>
   );
 
@@ -658,7 +659,7 @@ function Switcher({ notes, onPick, onCreate, onClose }: {
       <ul className="pick-list">
         {items.map((n, k) => (
           <li key={n.key}><button className={k === i ? "active" : ""} onMouseEnter={() => setI(k)} onClick={() => choose(k)}>
-            {n.source === "pdf" ? "📕" : "📄"} {n.title}
+            <span className="row-label"><Icon name={n.source === "pdf" ? "pdf" : "note"} size={15} /> {n.title}</span>
           </button></li>
         ))}
         {canCreate && (

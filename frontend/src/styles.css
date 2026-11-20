@@ -582,3 +582,34 @@ button.chip.active { background: var(--accent); color: #fff; }
 @media (prefers-reduced-motion: reduce) { .cz-steam path, .cz-sway { animation: none; } .cz-steam path { opacity: 0.5; } }
 @media (max-height: 600px) { .cozy-plant { display: none; } }
 @container (max-width: 640px) { .home-columns { grid-template-columns: minmax(0, 1fr); } .home-note { transform: none; } }
+
+/* ---------------------------------------------------------------- icon nét vẽ tay (thay emoji) */
+.icon { display: block; flex: none; }
+.tool-btn .icon { transition: transform 0.15s ease; }
+.tool-btn:hover:not(:disabled) .icon { transform: translateY(-1px) rotate(-4deg); }
+.tool-btn.active { color: var(--accent); }
+.tab-icon { display: inline-flex; color: var(--muted); }
+.tab.active .tab-icon { color: var(--accent); }
+.tab-new { display: inline-grid; place-items: center; }
+.menu-item { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.menu-item .icon, .menu-glyph { width: 16px; color: var(--muted); text-align: center; }
+.menu-item.danger .menu-glyph { color: var(--danger); }
+.panel-actions .icon-btn { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); background: transparent; border-color: var(--border); border-radius: 8px; padding: 4px 8px; }
+.panel-actions .icon-btn:hover:not(:disabled) { color: var(--accent); background: var(--bg3); }
+.pc-icon { color: var(--h-terra); display: inline-flex; }
+.primary-card .pc-icon { color: #fff8ef; }
+.home-stats span { display: inline-flex; align-items: center; gap: 6px; }
+.home-stats .icon { color: var(--h-sage); }
+.rc-title, .rc-meta { display: inline-flex; align-items: center; gap: 5px; }
+.rc-title .icon { color: var(--h-terra); }
+.file-icon { display: inline-flex; align-items: center; }
+.note-icon { color: var(--muted); }
+.note-icon.pdf { color: var(--accent); }
+.file-item.active .note-icon { color: var(--accent); }
+.folder-icon .icon { color: var(--sage); }
+.folder-icon .icon.open { fill: color-mix(in srgb, var(--sage) 22%, transparent); }
+.row .icon, .result-title .icon, .source .icon { display: inline-block; vertical-align: -3px; }
+.row-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.graph-card-title { display: flex; align-items: center; gap: 6px; }
+.graph-card-title .icon { color: var(--accent); }
+.pick-list button .icon { display: inline-block; vertical-align: -3px; margin-right: 4px; color: var(--muted); }

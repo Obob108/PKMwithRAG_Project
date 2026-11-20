@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Icon } from "./Icons.tsx";
 import { CozyEmpty, PlantCorner } from "./Cozy.tsx";
 import type { DragEvent, ReactNode } from "react";
 import type { ChatSource, ExplainSide, HttpApi, LinkExplanation, LinkStatus, RelatedItem, SearchHit } from "../lib/api.ts";
@@ -7,7 +8,7 @@ import type { LinkIndex, OutlineItem } from "../lib/text.ts";
 import type { Folder, LocalNote } from "../lib/types.ts";
 import type { LeftTab, RightTab } from "../lib/ui.ts";
 
-const icon = (n: LocalNote) => (n.source === "pdf" ? "📕" : "📄");
+const icon = (n: LocalNote) => <Icon name={n.source === "pdf" ? "pdf" : "note"} size={15} className={"note-icon " + n.source} />;
 
 // ================================================================== THANH BÊN TRÁI
 interface LeftProps {
@@ -181,11 +182,11 @@ function FilesPanel(p: LeftProps) {
   return (
     <div className="panel" {...dropProps("root")}>
       <div className="panel-actions">
-        <button onClick={() => p.onNew()} title="Ghi chú mới">✚ </button>
-        <button onClick={() => setEditing("new")} title="Tạo thư mục mới">📁 </button>
-        <button onClick={() => p.onUpload()} title="Tải lên .md / .pdf">⬆ </button>
-        <button onClick={() => setSort(sort === "recent" ? "name" : "recent")} title="Đổi cách sắp xếp">
-          {sort === "recent" ? "⏱ Mới nhất" : "A–Z"}
+        <button className="icon-btn" onClick={() => p.onNew()} title="Ghi chú mới" aria-label="Ghi chú mới"><Icon name="new" size={16} /></button>
+        <button className="icon-btn" onClick={() => setEditing("new")} title="Tạo thư mục mới" aria-label="Tạo thư mục mới"><Icon name="folderPlus" size={16} /></button>
+        <button className="icon-btn" onClick={() => p.onUpload()} title="Tải lên .md / .pdf" aria-label="Tải lên"><Icon name="upload" size={16} /></button>
+        <button className="icon-btn" onClick={() => setSort(sort === "recent" ? "name" : "recent")} title="Đổi cách sắp xếp">
+          {sort === "recent" ? <><Icon name="clock" size={15} /> Mới nhất</> : "A–Z"}
         </button>
       </div>
       {p.tagFilter && (
@@ -215,7 +216,7 @@ function FilesPanel(p: LeftProps) {
                 <div className="folder-row">
                   <button className="folder-head" onClick={() => p.onToggleFolder(f.id)} aria-expanded={open} title={f.name}>
                     <span className="caret">{open ? "▾" : "▸"}</span>
-                    <span className="file-icon">{open ? "📂" : "📁"}</span>
+                    <span className="file-icon folder-icon"><Icon name="folder" size={16} className={open ? "open" : ""} /></span>
                     <span className="file-title">{f.name}</span>
                     <span className="badge">{totals.get(f.id) ?? 0}</span>
                   </button>
@@ -464,11 +465,11 @@ function LinksPanel(p: RightProps) {
     <div className="panel">
       <h4>Liên kết đến ({back.length})</h4>
       {back.length === 0 && <div className="muted pad small">Chưa có ghi chú nào trỏ tới đây bằng [[{note.title}]].</div>}
-      {back.map((n) => <button key={n.key} className="row" onClick={() => p.onOpenKey(n.key)}>{icon(n)} {n.title}</button>)}
+      {back.map((n) => <button key={n.key} className="row" onClick={() => p.onOpenKey(n.key)}><span className="row-label">{icon(n)} {n.title}</span></button>)}
 
       <h4>Liên kết đi ({resolved.length})</h4>
       {resolved.length === 0 && <div className="muted pad small">Ghi chú này chưa liên kết tới ghi chú nào.</div>}
-      {resolved.map((n) => <button key={n.key} className="row" onClick={() => p.onOpenKey(n.key)}>{icon(n)} {n.title}</button>)}
+      {resolved.map((n) => <button key={n.key} className="row" onClick={() => p.onOpenKey(n.key)}><span className="row-label">{icon(n)} {n.title}</span></button>)}
 
       {unresolved.length > 0 && <h4>Chưa có ghi chú ({unresolved.length})</h4>}
       {unresolved.map((t) => <button key={t} className="row unresolved" onClick={() => p.onCreateTitle(t)} title="Bấm để tạo">＋ {t}</button>)}

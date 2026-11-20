@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Icon } from "./Icons.tsx";
 import type { ReactNode } from "react";
 import type { LiveState } from "../lib/live.ts";
 import type { LocalNote } from "../lib/types.ts";
@@ -17,22 +18,22 @@ export interface ToolbarProps {
   live: LiveState;
 }
 
-const toolBtn = (icon: string, title: string, onClick: () => void, cls = "") => (
+const toolBtn = (icon: ReactNode, title: string, onClick: () => void, cls = "") => (
   <button key={title} className={"tool-btn " + cls} title={title} aria-label={title} onClick={onClick}>{icon}</button>
 );
 
 export function Toolbar(p: ToolbarProps) {
   return (
     <nav className="toolbar" aria-label="Thanh công cụ">
-      {toolBtn("✚", "Ghi chú mới (Ctrl+N)", p.onNew)}
-      {toolBtn("🔎", "Mở nhanh (Ctrl+O)", p.onSwitcher)}
-      {toolBtn("🕸", "Graph view (Ctrl+G)", p.onGraph, p.graphActive ? "active" : "")}
-      {toolBtn("⬆", "Tải lên file .md / .pdf", p.onUpload)}
-      {toolBtn("💬", "Hỏi đáp trên ghi chú", p.onChat)}
+      {toolBtn(<Icon name="new" />, "Ghi chú mới (Ctrl+N)", p.onNew)}
+      {toolBtn(<Icon name="search" />, "Mở nhanh (Ctrl+O)", p.onSwitcher)}
+      {toolBtn(<Icon name="graph" />, "Graph view (Ctrl+G)", p.onGraph, p.graphActive ? "active" : "")}
+      {toolBtn(<Icon name="upload" />, "Tải lên file .md / .pdf", p.onUpload)}
+      {toolBtn(<Icon name="chat" />, "Hỏi đáp trên ghi chú", p.onChat)}
       <span className="spacer" />
-      {toolBtn("⌘", "Bảng lệnh (Ctrl+P)", p.onPalette)}
-      {toolBtn("⟳", p.live === "live" ? "Đã kết nối · bấm để đồng bộ ngay" : "Ngoại tuyến · bấm để thử đồng bộ", p.onSync, "sync " + p.live)}
-      {toolBtn("⚙", "Cài đặt (Ctrl+,)", p.onSettings)}
+      {toolBtn(<Icon name="command" />, "Bảng lệnh (Ctrl+P)", p.onPalette)}
+      {toolBtn(<Icon name="sync" />, p.live === "live" ? "Đã kết nối · bấm để đồng bộ ngay" : "Ngoại tuyến · bấm để thử đồng bộ", p.onSync, "sync " + p.live)}
+      {toolBtn(<Icon name="settings" />, "Cài đặt (Ctrl+,)", p.onSettings)}
     </nav>
   );
 }
@@ -77,8 +78,8 @@ export function UserMenu(p: UserMenuProps) {
   }, [open]);
   const status = p.live === "live" ? (p.pending ? `Đang đồng bộ ${p.pending} thay đổi…` : "Đã đồng bộ")
     : p.live === "connecting" ? "Đang kết nối…" : `Ngoại tuyến${p.pending ? ` · ${p.pending} thay đổi chờ gửi` : ""}`;
-  const item = (label: string, run: () => void, cls = "") => (
-    <button role="menuitem" className={"menu-item " + cls} onClick={() => { setOpen(false); run(); }}>{label}</button>
+  const item = (icon: ReactNode, label: string, run: () => void, cls = "") => (
+    <button role="menuitem" className={"menu-item " + cls} onClick={() => { setOpen(false); run(); }}>{icon}<span>{label}</span></button>
   );
   return (
     <div className="user-menu" ref={ref}>
@@ -98,11 +99,11 @@ export function UserMenu(p: UserMenuProps) {
               <div className={"muted small sync-text " + p.live}>● {status}</div>
             </div>
           </div>
-          {item("⚙  Cài đặt", p.onSettings)}
-          {item("⟳  Đồng bộ ngay", p.onSync)}
-          {item(p.theme === "dark" ? "☀  Giao diện sáng" : "☾  Giao diện tối", p.onToggleTheme)}
+          {item(<Icon name="settings" size={16} />, "Cài đặt", p.onSettings)}
+          {item(<Icon name="sync" size={16} />, "Đồng bộ ngay", p.onSync)}
+          {item(<span className="menu-glyph">{p.theme === "dark" ? "☀" : "☾"}</span>, p.theme === "dark" ? "Giao diện sáng" : "Giao diện tối", p.onToggleTheme)}
           <div className="menu-sep" />
-          {item("⎋  Đăng xuất", p.onLogout, "danger")}
+          {item(<span className="menu-glyph">⎋</span>, "Đăng xuất", p.onLogout, "danger")}
         </div>
       )}
     </div>
@@ -134,11 +135,11 @@ interface TabBarProps {
 }
 
 export function TabBar({ tabs, activeId, onSelect, onClose, onNew, onToggleRight, rightOpen, leftOpen, onToggleLeft, quickTools, user }: TabBarProps) {
-  const icon = (k: TabView["kind"]) => (k === "graph" ? "🕸" : k === "pdf" ? "📕" : "📄");
+  const icon = (k: TabView["kind"]) => <Icon name={k === "graph" ? "graph" : k === "pdf" ? "pdf" : "note"} size={15} />;
   return (
     <div className="tabbar" role="tablist">
       <button className={"tool-btn" + (leftOpen ? " active" : "")} title="Bật/tắt thanh bên trái" aria-label="Bật/tắt thanh bên trái"
-              onClick={onToggleLeft}>☰</button>
+              onClick={onToggleLeft}><Icon name="menu" /></button>
       {!leftOpen && quickTools}
       <div className="tabs-scroll">
         {tabs.map((t) => (
@@ -153,9 +154,9 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onNew, onToggleRight
             <button className="tab-close" aria-label="Đóng tab" onClick={(e) => { e.stopPropagation(); onClose(t.id); }}>×</button>
           </div>
         ))}
-        <button className="tab-new" title="Ghi chú mới" aria-label="Ghi chú mới" onClick={onNew}>＋</button>
+        <button className="tab-new" title="Ghi chú mới" aria-label="Ghi chú mới" onClick={onNew}><Icon name="plus" size={16} /></button>
       </div>
-      <button className={"tool-btn" + (rightOpen ? " active" : "")} title="Bật/tắt thanh bên phải" aria-label="Bật/tắt thanh bên phải" onClick={onToggleRight}>▤</button>
+      <button className={"tool-btn" + (rightOpen ? " active" : "")} title="Bật/tắt thanh bên phải" aria-label="Bật/tắt thanh bên phải" onClick={onToggleRight}><Icon name="panel" /></button>
       {user}
     </div>
   );

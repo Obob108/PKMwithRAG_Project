@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Icon } from "./Icons.tsx";
 import type { KeyboardEvent } from "react";
 import type { HttpApi } from "../lib/api.ts";
 import {
@@ -788,7 +789,7 @@ export default function GraphView(p: Props) {
       {/* ---------------- bảng xem trước ghi chú đang chọn */}
       {selected && (
         <div className="graph-card">
-          <div className="graph-card-title">{selected.source === "pdf" ? "📕" : "📄"} {selected.title}</div>
+          <div className="graph-card-title"><Icon name={selected.source === "pdf" ? "pdf" : "note"} size={16} /> {selected.title}</div>
           <label className="field small">
             <span className="dot" style={{ background: palette.get(selFolderKey) ?? NO_FOLDER_COLOR }} />
             <select value={selected.folder_id ?? ""} disabled={!selLocal} title="Chuyển ghi chú sang thư mục khác"

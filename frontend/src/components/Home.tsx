@@ -1,6 +1,7 @@
 // Trang chủ phong cách lo-fi / cottagecore: cửa sổ có cây, tách trà, sách; sáng = buổi sáng ấm nắng, tối = đêm lo-fi.
 // Hình minh họa vẽ bằng SVG thuần, màu lấy từ biến CSS nên tự đổi theo giao diện sáng/tối.
 import { useMemo } from "react";
+import { Icon } from "./Icons.tsx";
 import type { Folder, LocalNote } from "../lib/types.ts";
 import { avatarColor, initialOf } from "./Chrome.tsx";
 
@@ -78,26 +79,26 @@ export default function Home(p: Props) {
         </header>
 
         <div className="home-stats">
-          <span>🌿 {p.notes.length} ghi chú</span>
-          <span>📁 {p.folders.length} thư mục</span>
-          <span>🏷 {p.tagCount} thẻ</span>
+          <span><Icon name="leaf" size={14} /> {p.notes.length} ghi chú</span>
+          <span><Icon name="folder" size={14} /> {p.folders.length} thư mục</span>
+          <span><Icon name="tag" size={14} /> {p.tagCount} thẻ</span>
         </div>
 
         <div className="home-actions">
           <button className="paper-card primary-card" onClick={p.onNew}>
-            <span className="pc-icon">✎</span><span className="pc-title">Ghi chú mới</span><kbd>Ctrl+N</kbd>
+            <span className="pc-icon"><Icon name="new" size={22} /></span><span className="pc-title">Ghi chú mới</span><kbd>Ctrl+N</kbd>
           </button>
           <button className="paper-card" onClick={p.onSwitcher}>
-            <span className="pc-icon">🔎</span><span className="pc-title">Mở nhanh</span><kbd>Ctrl+O</kbd>
+            <span className="pc-icon"><Icon name="search" size={22} /></span><span className="pc-title">Mở nhanh</span><kbd>Ctrl+O</kbd>
           </button>
           <button className="paper-card" onClick={p.onGraph}>
-            <span className="pc-icon">🕸</span><span className="pc-title">Graph view</span><kbd>Ctrl+G</kbd>
+            <span className="pc-icon"><Icon name="graph" size={22} /></span><span className="pc-title">Graph view</span><kbd>Ctrl+G</kbd>
           </button>
           <button className="paper-card" onClick={p.onChat}>
-            <span className="pc-icon">💬</span><span className="pc-title">Hỏi đáp</span>
+            <span className="pc-icon"><Icon name="chat" size={22} /></span><span className="pc-title">Hỏi đáp</span>
           </button>
           <button className="paper-card" onClick={p.onUpload}>
-            <span className="pc-icon">⬆</span><span className="pc-title">Tải lên .md / .pdf</span>
+            <span className="pc-icon"><Icon name="upload" size={22} /></span><span className="pc-title">Tải lên .md / .pdf</span>
           </button>
         </div>
 
@@ -109,9 +110,9 @@ export default function Home(p: Props) {
               {recent.map((n) => (
                 <li key={n.key}>
                   <button className="recent-card" onClick={() => p.onOpenKey(n.key)}>
-                    <span className="rc-title">{n.source === "pdf" ? "📕" : "📄"} {n.title || "Chưa đặt tên"}</span>
+                    <span className="rc-title"><Icon name={n.source === "pdf" ? "pdf" : "note"} size={15} /> {n.title || "Chưa đặt tên"}</span>
                     <span className="rc-meta">
-                      {n.folder_id != null && folderName.has(n.folder_id) ? `📁 ${folderName.get(n.folder_id)} · ` : ""}{ago(n.updated_ms, now)}
+                      {n.folder_id != null && folderName.has(n.folder_id) && <><Icon name="folder" size={12} /> {folderName.get(n.folder_id)} · </>}{ago(n.updated_ms, now)}
                     </span>
                     {snippet(n.content) && <span className="rc-snippet">{snippet(n.content)}</span>}
                   </button>
