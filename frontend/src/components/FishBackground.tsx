@@ -1,8 +1,8 @@
-// Đàn cá bơi ngang nền trang đăng nhập (chỉ trang trí: không bắt chuột, tắt khi người dùng chọn "giảm chuyển động").
+// Đàn cá bơi ngang nền (trang đăng nhập + trang chủ) (chỉ trang trí: không bắt chuột, tắt khi người dùng chọn "giảm chuyển động").
 import { useMemo } from "react";
 import type { CSSProperties } from "react";
 
-const COLORS = ["#ff8a5c", "#ffd166", "#f4978e", "#7bdff2", "#ffffff", "#c8b6ff"];
+const COLORS = ["#ff8a5c", "#ffd166", "#f4978e", "#7bdff2", "#ffffff", "#9fe3c9"];
 
 interface Fish {
   top: number;      // % chiều cao

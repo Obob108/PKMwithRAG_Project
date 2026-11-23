@@ -39,7 +39,7 @@ export function Toolbar(p: ToolbarProps) {
 }
 
 // ------------------------------------------------------------------ Người dùng (góc phải thanh tab)
-const AVATAR_COLORS = ["#c97b63", "#8a9a5b", "#b5838d", "#6d8b9e", "#d4a373", "#9c7aa8", "#7a9e7e", "#c08552"];
+const AVATAR_COLORS = ["#1b7fa6", "#3aa6c2", "#ff8a5c", "#f4978e", "#2f9e6e", "#2f9e8f", "#e0a33a", "#4f86c6"];
 
 /** Màu avatar cố định theo tên đăng nhập (cùng tên → cùng màu trên mọi thiết bị). */
 export function avatarColor(name: string): string {

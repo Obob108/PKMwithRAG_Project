@@ -2,6 +2,7 @@
 // Hình minh họa vẽ bằng SVG thuần, màu lấy từ biến CSS nên tự đổi theo giao diện sáng/tối.
 import { useMemo } from "react";
 import { Icon } from "./Icons.tsx";
+import FishBackground from "./FishBackground.tsx";
 import type { Folder, LocalNote } from "../lib/types.ts";
 import { avatarColor, initialOf } from "./Chrome.tsx";
 
@@ -67,6 +68,8 @@ export default function Home(p: Props) {
 
   return (
     <div className={"home " + (p.theme === "dark" ? "night" : "day")}>
+      <FishBackground count={7} />
+      <div className="home-scroll">
       <div className="home-inner">
         <Scene />
 
@@ -126,6 +129,7 @@ export default function Home(p: Props) {
             <p>{tip}</p>
           </aside>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -32,7 +32,7 @@ interface Colors {
 function readColors(): Colors {
   const cs = getComputedStyle(document.documentElement);
   const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
-  return { bg: v("--bg", "#1e1e1e"), fg: v("--fg", "#dcddde"), muted: v("--muted", "#999"), accent: v("--accent", "#7c6cf0"), edge: v("--edge", "#888") };
+  return { bg: v("--bg", "#1e1e1e"), fg: v("--fg", "#dcddde"), muted: v("--muted", "#999"), accent: v("--accent", "#1b7fa6"), edge: v("--edge", "#888") };
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
@@ -444,7 +444,7 @@ export default function GraphView(p: Props) {
         if (showLabel && al > 0.3) {
           c.globalAlpha = al;
           c.fillStyle = col.fg;
-          c.font = `${isMatch ? "600 12px" : "11px"} system-ui, sans-serif`;
+          c.font = `${isMatch ? "600 12px" : "11px"} "Segoe UI", Roboto, system-ui, sans-serif`;
           c.textAlign = "center";
           const t = meta.title.length > 28 ? meta.title.slice(0, 27) + "…" : meta.title;
           c.fillText(t, sx, sy + rr + 13);
