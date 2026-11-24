@@ -63,6 +63,7 @@ interface UserMenuProps {
   onSync: () => void;
   onToggleTheme: () => void;
   onLogout: () => void;
+  logoutLabel?: string; // bản demo: "Đăng nhập / Đăng ký" thay cho "Đăng xuất"
 }
 
 export function UserMenu(p: UserMenuProps) {
@@ -103,7 +104,7 @@ export function UserMenu(p: UserMenuProps) {
           {item(<Icon name="sync" size={16} />, "Đồng bộ ngay", p.onSync)}
           {item(<span className="menu-glyph">{p.theme === "dark" ? "☀" : "☾"}</span>, p.theme === "dark" ? "Giao diện sáng" : "Giao diện tối", p.onToggleTheme)}
           <div className="menu-sep" />
-          {item(<span className="menu-glyph">⎋</span>, "Đăng xuất", p.onLogout, "danger")}
+          {item(<span className="menu-glyph">⎋</span>, p.logoutLabel ?? "Đăng xuất", p.onLogout, p.logoutLabel ? "" : "danger")}
         </div>
       )}
     </div>

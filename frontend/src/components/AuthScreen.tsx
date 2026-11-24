@@ -20,8 +20,12 @@ type Mode = "login" | "register" | "forgot";
 // Quên mật khẩu gồm 2 bước: "email" = xin mã OTP gửi về Gmail; "code" = nhập mã + mật khẩu mới.
 type ForgotStep = "email" | "code";
 
-export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void }) {
-  const [mode, setMode] = useState<Mode>("login");
+export default function AuthScreen({ onLogin, onDemo, initialMode = "login" }: {
+  onLogin: (s: Session) => void;
+  onDemo?: () => void; // quay lại bản demo (khách chưa có tài khoản)
+  initialMode?: "login" | "register";
+}) {
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [cfg, setCfg] = useState<PublicConfig>({ allow_registration: true, invite_required: false, hcaptcha_sitekey: null });
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -191,6 +195,9 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
         )}
         {mode === "forgot" && (
           <button type="button" className="auth-link" onClick={() => switchMode("login")}>← Quay lại đăng nhập</button>
+        )}
+        {onDemo && mode !== "forgot" && (
+          <button type="button" className="auth-link" onClick={onDemo}>← Xem bản demo, không cần tài khoản</button>
         )}
         {!cfg.allow_registration && mode !== "forgot" && <p className="muted small">Máy chủ đang tắt đăng ký. Hãy nhờ quản trị viên tạo tài khoản.</p>}
       </form>

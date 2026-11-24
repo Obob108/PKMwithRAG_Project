@@ -11,6 +11,8 @@ import PdfViewer from "./components/PdfViewer.tsx";
 import { LeftSidebar, RightSidebar } from "./components/Sidebars.tsx";
 import type { ChatMsg } from "./components/Sidebars.tsx";
 import { HttpApi } from "./lib/api.ts";
+import { DEMO_SESSION, DemoApi, MemoryStore } from "./lib/demo.ts";
+import { DEMO_NOTES, START_TITLE } from "./lib/demoData.ts";
 import type { Session } from "./lib/api.ts";
 import { SyncEngine } from "./lib/engine.ts";
 import { openIdbStore } from "./lib/idb.ts";
@@ -55,19 +57,64 @@ function deviceId(): string {
   }
 }
 
-// ================================================================== vỏ: đăng nhập → khởi động engine
+// ================================================================== vỏ: demo / đăng nhập → khởi động engine
+type AuthMode = "login" | "register";
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(readSession);
+  // Khách chưa đăng nhập vào thẳng bản demo; chỉ hiện màn đăng nhập khi họ bấm Đăng nhập / Đăng ký.
+  const [auth, setAuth] = useState<AuthMode | null>(null);
   const login = (s: Session) => {
     writeSession(s);
+    setAuth(null);
     setSession(s);
   };
   const logout = useCallback(() => {
     writeSession(null);
     setSession(null);
+    setAuth("login");
   }, []);
-  if (!session) return <AuthScreen onLogin={login} />;
-  return <Boot key={session.userId} session={session} onLogout={logout} />;
+  if (session) return <Boot key={session.userId} session={session} onLogout={logout} />;
+  if (auth) return <AuthScreen key={auth} initialMode={auth} onLogin={login} onDemo={() => setAuth(null)} />;
+  return <DemoBoot onAuth={setAuth} />;
+}
+
+/** Bản demo: cùng giao diện thật, dữ liệu mẫu nằm trong bộ nhớ trình duyệt, không gọi máy chủ. */
+function DemoBoot({ onAuth }: { onAuth: (m: AuthMode) => void }) {
+  const [live, setLive] = useState<Live | null>(null);
+  useEffect(() => {
+    const api = new DemoApi();
+    const engine = new SyncEngine(api, new MemoryStore(), { deviceId: "demo", debounceMs: 400 });
+    let cancelled = false;
+    void engine.init().then(() => engine.catchUp()).then(() => {
+      if (!cancelled) setLive({ engine, api, state: "live", wake: () => undefined });
+    });
+    return () => {
+      cancelled = true;
+      engine.dispose();
+      setLive(null);
+    };
+  }, []);
+  if (!live) return <div className="boot">Đang mở bản demo…</div>;
+  return <Workspace session={DEMO_SESSION} onLogout={() => onAuth("login")} live={live} demo={{ onAuth }} />;
+}
+
+function DemoBanner({ onAuth, onGuide, compact }: { onAuth: (m: AuthMode) => void; onGuide: () => void; compact: boolean }) {
+  return (
+    <div className="demo-banner" role="region" aria-label="Bản demo">
+      <span className="demo-badge">Bản demo</span>
+      <span className="demo-text">
+        {compact
+          ? `${DEMO_NOTES.length} ghi chú mẫu · thay đổi mất khi tải lại trang`
+          : `Bạn đang dùng thử với ${DEMO_NOTES.length} ghi chú mẫu: thử Graph, gợi ý liên kết và hỏi đáp. Mọi thay đổi chỉ nằm trên trình duyệt này và mất khi tải lại trang.`}
+      </span>
+      <span className="demo-actions">
+        {!compact && <button className="auth-link" onClick={onGuide}>Hướng dẫn</button>}
+        <button onClick={() => onAuth("login")}>Đăng nhập</button>
+        <button className="primary" onClick={() => onAuth("register")}>Đăng ký miễn phí</button>
+      </span>
+    </div>
+  );
 }
 
 interface Live {
@@ -122,7 +169,9 @@ function uniqueTitle(notes: LocalNote[], base: string): string {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-function Workspace({ session, onLogout, live }: { session: Session; onLogout: () => void; live: Live }) {
+function Workspace({ session, onLogout, live, demo }: {
+  session: Session; onLogout: () => void; live: Live; demo?: { onAuth: (m: AuthMode) => void };
+}) {
   const { engine, api } = live;
   const online = live.state === "live";
   const notes = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
@@ -200,11 +249,11 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
 
   useEffect(() => {
     const h = (e: BeforeUnloadEvent) => {
-      if (engine.pendingCount() > 0) e.preventDefault();
+      if (!demo && engine.pendingCount() > 0) e.preventDefault();
     };
     window.addEventListener("beforeunload", h);
     return () => window.removeEventListener("beforeunload", h);
-  }, [engine]);
+  }, [engine, demo]);
 
   // ---------------------------------------------------------------- mở / tạo
   const activate = useCallback((tab: Tab) => {
@@ -420,8 +469,8 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
     { name: "Đồng bộ ngay", hint: "", run: syncNow },
     { name: ui.theme === "dark" ? "Chuyển giao diện sáng" : "Chuyển giao diện tối", hint: "", run: () => setUi({ theme: ui.theme === "dark" ? "light" : "dark" }) },
     { name: "Cài đặt", hint: "Ctrl+,", run: () => setDialog("settings") },
-    { name: "Đăng xuất", hint: "", run: onLogout },
-  ], [newNote, openGraph, toggleMode, openChat, setUi, syncNow, ui.leftOpen, ui.rightOpen, ui.theme, onLogout, requestUpload]);
+    { name: demo ? "Đăng nhập / Đăng ký" : "Đăng xuất", hint: "", run: onLogout },
+  ], [newNote, openGraph, toggleMode, openChat, setUi, syncNow, ui.leftOpen, ui.rightOpen, ui.theme, onLogout, requestUpload, demo]);
 
   // ---------------------------------------------------------------- phím tắt
   useEffect(() => {
@@ -486,7 +535,11 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
   );
 
   const logoutChecked = () => {
-    if (engine.pendingCount() === 0 || confirm("Còn thay đổi chưa đồng bộ trên thiết bị này. Vẫn đăng xuất?")) onLogout();
+    if (demo || engine.pendingCount() === 0 || confirm("Còn thay đổi chưa đồng bộ trên thiết bị này. Vẫn đăng xuất?")) onLogout();
+  };
+  const openGuide = () => {
+    const n = notes.find((x) => x.title === START_TITLE);
+    if (n) openKey(n.key);
   };
   const quickTools = !narrow && (
     <div className="quick-tools">
@@ -498,7 +551,8 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
   );
 
   return (
-    <div className={"app" + (narrow ? " narrow" : "")}>
+    <div className={"app" + (narrow ? " narrow" : "") + (demo ? " demo" : "")}>
+      {demo && <DemoBanner onAuth={demo.onAuth} onGuide={openGuide} compact={narrow} />}
       <div className="app-body">
         {leftEl && (
           <>
@@ -526,6 +580,7 @@ function Workspace({ session, onLogout, live }: { session: Session; onLogout: ()
                 username={session.username} live={live.state} pending={engine.pendingCount()} theme={ui.theme} compact={narrow}
                 onSettings={() => setDialog("settings")} onSync={syncNow}
                 onToggleTheme={() => setUi({ theme: ui.theme === "dark" ? "light" : "dark" })} onLogout={logoutChecked}
+                logoutLabel={demo ? "Đăng nhập / Đăng ký" : undefined}
               />
             }
           />

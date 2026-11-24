@@ -69,6 +69,11 @@ Header X-Device-Id (tùy chọn) để thiết bị nhận ra sự kiện do ch�
 Mọi truy vấn lọc theo user_id lấy từ token; file PDF upload lưu theo user, tên do hệ thống đặt.
 
 ## 7. Giao diện (frontend/, React + Vite + TypeScript)
+- Bản demo cho khách: mở web khi chưa đăng nhập là vào thẳng giao diện bên trong với 11 ghi chú mẫu (3 thư mục), thanh
+  "Bản demo" mời Đăng nhập / Đăng ký. DemoApi (src/lib/demo.ts) cùng giao diện với HttpApi nhưng chạy hoàn toàn trên trình
+  duyệt, lưu trong bộ nhớ (mất khi tải lại), KHÔNG gọi máy chủ: không tốn hạn mức Gemini, không ghi vào CSDL. Phần AI là
+  minh họa: gợi ý liên kết tính sẵn (demoData.ts), tìm kiếm theo từ khóa không dấu, hỏi đáp theo 5 câu mẫu có nguồn;
+  không tải file lên được. Đăng xuất thì về màn đăng nhập (có nút quay lại bản demo).
 Bố cục kiểu Obsidian desktop, co lại thành ngăn kéo trên điện thoại:
 - Đăng nhập / Đăng ký (có mã mời nếu máy chủ bật).
 - Hàng công cụ ngang ở đầu thanh bên trái: ghi chú mới, mở nhanh, Graph, tải lên, hỏi đáp | bảng lệnh, đồng bộ, cài đặt.
