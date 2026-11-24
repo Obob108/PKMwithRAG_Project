@@ -1,4 +1,6 @@
 """Kiem thu API bang TestClient (can fastapi, httpx, argon2: da co trong requirements.txt)."""
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -6,7 +8,7 @@ from app.core.config import Settings
 from app.core.db import connect
 from app.core.security import hash_password
 from app.main import create_app
-from tests.fakes import FakeEmbedder, FakeLLM, FakeStores
+from tests.fakes import FakeEmbedder, FakeLLM, FakeMailer, FakeStores
 
 A = "retrieval augmented generation vector search embeddings"
 B = "vector search embeddings faiss index"
@@ -16,7 +18,7 @@ B = "vector search embeddings faiss index"
 def client(tmp_path):
     settings = Settings(_env_file=None, data_dir=tmp_path, jwt_secret="test-secret", link_threshold=0.3)
     app = create_app(settings, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("Trả lời thử [1]."),
-                     stores=FakeStores())
+                     stores=FakeStores(), mailer=FakeMailer())
     with TestClient(app) as c:
         conn = connect(settings.db_path)
         for name in ("alice", "bob"):
@@ -27,8 +29,8 @@ def client(tmp_path):
         yield c
 
 
-def login(client, name="alice"):
-    r = client.post("/api/auth/login", data={"username": name, "password": "pw-" + name})
+def login(client, name="alice", password=None):
+    r = client.post("/api/auth/login", data={"username": name, "password": password or "pw-" + name})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
@@ -244,21 +246,78 @@ def test_register_requires_unique_gmail(client):
     assert r.status_code == 409 and "Email" in r.json()["detail"]
 
 
-def test_forgot_password_resets_with_matching_email(client):
-    r = client.post("/api/auth/reset-password", json={"email": "ALICE@gmail.com", "new_password": "mat-khau-moi"})
+def _sent_code(client) -> str:
+    """Ma OTP trong email gan nhat (FakeMailer)."""
+    to, subject, body = client.app.state.mailer.sent[-1]
+    code = re.search(r"\b(\d{6})\b", body).group(1)
+    assert code in subject
+    return code
+
+
+def test_forgot_password_same_reply_whether_email_exists(client):
+    ok = client.post("/api/auth/forgot-password", json={"email": "ALICE@gmail.com"})
+    missing = client.post("/api/auth/forgot-password", json={"email": "ai-do@gmail.com"})
+    assert ok.status_code == missing.status_code == 200 and ok.json() == missing.json()
+    assert "username" not in ok.json()
+    mails = client.app.state.mailer.sent
+    assert len(mails) == 1 and mails[0][0] == "alice@gmail.com"
+    assert client.post("/api/auth/forgot-password", json={"email": "alice@yahoo.com"}).status_code == 422
+
+
+def test_reset_password_requires_emailed_code(client):
+    old_token = login(client)["Authorization"]
+    # Khong co ma / ma sai: khong doi duoc (lo hong cu: chi can email)
+    assert client.post("/api/auth/reset-password",
+                       json={"email": "alice@gmail.com", "new_password": "mat-khau-moi"}).status_code == 422
+    client.post("/api/auth/forgot-password", json={"email": "alice@gmail.com"})
+    code = _sent_code(client)
+    wrong = "000000" if code != "000000" else "111111"
+    r = client.post("/api/auth/reset-password",
+                    json={"email": "alice@gmail.com", "code": wrong, "new_password": "mat-khau-moi"})
+    assert r.status_code == 400
+    assert client.post("/api/auth/login", data={"username": "alice", "password": "pw-alice"}).status_code == 200
+    # Ma dung
+    r = client.post("/api/auth/reset-password",
+                    json={"email": "alice@gmail.com", "code": code, "new_password": "mat-khau-moi"})
     assert r.status_code == 200 and r.json() == {"username": "alice"}
     assert client.post("/api/auth/login", data={"username": "alice", "password": "pw-alice"}).status_code == 401
     assert client.post("/api/auth/login", data={"username": "alice", "password": "mat-khau-moi"}).status_code == 200
-    # email khong ton tai: khong doi gi; mat khau moi qua ngan: 422
-    assert client.post("/api/auth/reset-password", json={"email": "ai@gmail.com", "new_password": "mat-khau-moi"}).status_code == 404
-    assert client.post("/api/auth/reset-password", json={"email": "bob@gmail.com", "new_password": "ngan"}).status_code == 422
+    # Token cap truoc khi doi mat khau het hieu luc; ma chi dung mot lan
+    assert client.get("/api/me", headers={"Authorization": old_token}).status_code == 401
+    assert client.get("/api/me", headers=login(client, "alice", "mat-khau-moi")).status_code == 200
+    again = client.post("/api/auth/reset-password",
+                        json={"email": "alice@gmail.com", "code": code, "new_password": "mat-khau-khac"})
+    assert again.status_code == 400
+    # Tai khoan khac khong bi anh huong
     assert client.post("/api/auth/login", data={"username": "bob", "password": "pw-bob"}).status_code == 200
 
 
-def test_forgot_password_is_rate_limited(client):
+def test_reset_password_unknown_email_gives_same_error(client):
+    r = client.post("/api/auth/reset-password",
+                    json={"email": "ai-do@gmail.com", "code": "123456", "new_password": "mat-khau-moi"})
+    assert r.status_code == 400
+    client.post("/api/auth/forgot-password", json={"email": "bob@gmail.com"})
+    r2 = client.post("/api/auth/reset-password",
+                     json={"email": "bob@gmail.com", "code": "abcdef", "new_password": "mat-khau-moi"})
+    assert r2.status_code == 400 and r2.json() == r.json()
+
+
+def test_reset_password_wrong_codes_are_rate_limited(client):
+    client.post("/api/auth/forgot-password", json={"email": "alice@gmail.com"})
+    code = _sent_code(client)
+    wrong = "000000" if code != "000000" else "111111"
     for _ in range(5):
-        assert client.post("/api/auth/reset-password", json={"email": "x@gmail.com", "new_password": "mat-khau-moi"}).status_code == 404
-    assert client.post("/api/auth/reset-password", json={"email": "alice@gmail.com", "new_password": "mat-khau-moi"}).status_code == 429
+        assert client.post("/api/auth/reset-password",
+                           json={"email": "alice@gmail.com", "code": wrong, "new_password": "mat-khau-moi"}).status_code == 400
+    r = client.post("/api/auth/reset-password",
+                    json={"email": "alice@gmail.com", "code": code, "new_password": "mat-khau-moi"})
+    assert r.status_code == 429
+
+
+def test_forgot_password_limits_mails_per_email(client):
+    for _ in range(5):
+        assert client.post("/api/auth/forgot-password", json={"email": "alice@gmail.com"}).status_code == 200
+    assert len(client.app.state.mailer.sent) == 3  # toi da 3 email/gio cho moi dia chi
 
 
 def test_register_disabled_and_invite_code(tmp_path):

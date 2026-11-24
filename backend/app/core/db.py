@@ -70,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(user_id, session_id)
 """
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # v6: anh dinh kem (dan/keo tha vao ghi chu, nhung bang ![[ten]]). Ten duy nhat theo user; file luu
 # o uploads/<user_id>/att/<uuid>.<duoi>, ten file tren dia do he thong dat (khong dung ten tu client).
@@ -84,6 +84,17 @@ CREATE TABLE IF NOT EXISTS attachments (
     size       INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (user_id, name)
+);
+"""
+
+# v8: ma OTP dat lai mat khau. Moi tai khoan toi da mot ma con hieu luc; chi luu bam HMAC cua ma,
+# expires_at = thoi diem het han (giay Unix), attempts = so lan nhap sai.
+MIGRATION_V8_PASSWORD_RESETS = """
+CREATE TABLE IF NOT EXISTS password_resets (
+    user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    code_hash  TEXT NOT NULL,
+    expires_at REAL NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -223,6 +234,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "email" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL")
+    # v8: quen mat khau bang OTP. token_version nam trong JWT; doi mat khau thi tang len de moi token cu het hieu luc.
+    if "token_version" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
+    conn.executescript(MIGRATION_V8_PASSWORD_RESETS)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 

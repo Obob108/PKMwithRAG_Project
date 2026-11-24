@@ -71,3 +71,13 @@ class FakeLLM:
     def generate(self, prompt: str, system: str | None = None) -> str:
         self.prompts.append((prompt, system))
         return self.reply
+
+
+class FakeMailer:
+    """Luu email thay vi gui that."""
+
+    def __init__(self):
+        self.sent: list[tuple[str, str, str]] = []
+
+    def send(self, to: str, subject: str, body: str) -> None:
+        self.sent.append((to, subject, body))

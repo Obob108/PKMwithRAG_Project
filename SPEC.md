@@ -45,7 +45,7 @@ Chỉ cập nhật cạnh của phần thay đổi, không tính lại toàn b�
 Baseline so sánh: vector thuần (chỉ danh sách A).
 
 ## 6. API (tiền tố /api; Swagger tại /docs)
-Auth: GET /config (allow_registration, invite_required) | POST /auth/register {username, email (Gmail, duy nhất), password≥8, invite_code?} | POST /auth/reset-password {email, new_password≥8} (quên mật khẩu: email khớp tài khoản → đổi mật khẩu, quay về đăng nhập; sai email 5 lần/15 phút/IP thì chặn)
+Auth: GET /config (allow_registration, invite_required) | POST /auth/register {username, email (Gmail, duy nhất), password≥8, invite_code?} | POST /auth/forgot-password {email} (gửi mã OTP 6 số về Gmail; luôn trả cùng một thông báo dù email có tài khoản hay không; tối đa 3 mã/giờ/email, 10 yêu cầu/giờ/IP) | POST /auth/reset-password {email, code, new_password≥8} (mã đúng, còn hạn 10 phút, dùng một lần, sai 5 lần thì hủy mã; đổi mật khẩu thì tăng users.token_version nên mọi JWT cũ hết hiệu lực; sai 5 lần/15 phút/IP thì chặn)
   → JWT | POST /auth/login (form username+password → JWT Bearer) | GET /me
   Đăng ký: tên 3–32 ký tự [A-Za-z0-9_.-], không phân biệt hoa/thường; tắt được bằng ALLOW_REGISTRATION=false,
   yêu cầu mã mời bằng INVITE_CODE. Giới hạn tốc độ trong bộ nhớ: đăng nhập sai 10 lần/5 phút (theo IP+tên) → 429;
@@ -124,7 +124,7 @@ Schema v6: bảng attachments. Giới hạn: dán ảnh cần mạng; xóa ghi c
 - Liên kết ngữ nghĩa: lấy mẫu ~50 cặp cạnh, tự gán nhãn, precision theo từng τ.
 
 ## 9. Ngoài phạm vi
-Không Electron, OCR/PDF scan, đồng bộ Drive/Dropbox, mã hóa dữ liệu, xác minh email/quên mật khẩu,
+Không Electron, OCR/PDF scan, đồng bộ Drive/Dropbox, mã hóa dữ liệu, xác minh email lúc đăng ký,
 nhiều người dùng đại trà (đăng ký có sẵn nhưng chỉ ở mức demo: giới hạn tốc độ trong bộ nhớ, mã mời tùy chọn). Hạn chế: ghi chú và đoạn trích gửi tới API LLM (không local-first).
 
 ## 10. Lộ trình đến 15/12

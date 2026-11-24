@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import HCaptcha from "./HCaptcha.tsx";
 import type { HCaptchaHandle } from "./HCaptcha.tsx";
-import { getConfig, isGmail, login, register, resetPassword } from "../lib/api.ts";
+import { forgotPassword, getConfig, isGmail, login, register, resetPassword } from "../lib/api.ts";
 import type { PublicConfig, Session } from "../lib/api.ts";
 import { ApiError, NetworkError } from "../lib/types.ts";
 import FishBackground from "./FishBackground.tsx";
@@ -17,12 +17,16 @@ function EyeIcon({ off }: { off: boolean }) {
 }
 
 type Mode = "login" | "register" | "forgot";
+// Quên mật khẩu gồm 2 bước: "email" = xin mã OTP gửi về Gmail; "code" = nhập mã + mật khẩu mới.
+type ForgotStep = "email" | "code";
 
 export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void }) {
   const [mode, setMode] = useState<Mode>("login");
   const [cfg, setCfg] = useState<PublicConfig>({ allow_registration: true, invite_required: false, hcaptcha_sitekey: null });
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
+  const [step, setStep] = useState<ForgotStep>("email");
+  const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [invite, setInvite] = useState("");
@@ -42,6 +46,8 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
 
   const switchMode = (m: Mode) => {
     setMode(m);
+    setStep("email");
+    setCode("");
     setError(null);
     setNotice(null);
     setPassword("");
@@ -59,8 +65,10 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
     setError(null);
     setNotice(null);
     if (mode === "register" && !/^[A-Za-z0-9_.-]{3,32}$/.test(username.trim())) return setError("Tên đăng nhập 3–32 ký tự: chữ, số, _ . -");
-    if (mode !== "login") {
-      if (!isGmail(email)) return setError("Email phải đúng định dạng Gmail (vd: ten@gmail.com)");
+    const askingCode = mode === "forgot" && step === "email";
+    if (mode !== "login" && !isGmail(email)) return setError("Email phải đúng định dạng Gmail (vd: ten@gmail.com)");
+    if (mode === "forgot" && step === "code" && !/^\d{6}$/.test(code.trim())) return setError("Mã xác nhận gồm 6 chữ số");
+    if (mode !== "login" && !askingCode) {
       if (password.length < 8) return setError("Mật khẩu cần ít nhất 8 ký tự");
       if (password !== confirm) return setError("Hai mật khẩu không khớp");
     }
@@ -68,10 +76,17 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
     setBusy(true);
     const token = captchaToken ?? undefined;
     try {
-      if (mode === "forgot") {
-        const { username: u } = await resetPassword("", email.trim(), password, token);
+      if (askingCode) {
+        // Bước 1: máy chủ luôn trả cùng một thông báo, dù email có tài khoản hay không.
+        setNotice(await forgotPassword("", email.trim(), token));
+        setStep("code");
+        setCode("");
+      } else if (mode === "forgot") {
+        const { username: u } = await resetPassword("", email.trim(), code.trim(), password, token);
         // Đổi xong: quay về đăng nhập, điền sẵn tên đăng nhập, người dùng nhập mật khẩu mới.
         setMode("login");
+        setStep("email");
+        setCode("");
         setUsername(u);
         setEmail("");
         setPassword("");
@@ -85,12 +100,7 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
       }
     } catch (err) {
       setError(errorText(err));
-      if (mode === "forgot") {
-        // Email sai: xoá trắng ô nhập để người dùng nhập lại từ đầu.
-        setEmail("");
-        setPassword("");
-        setConfirm("");
-      }
+      if (mode === "forgot" && step === "code") setCode(""); // mã sai/hết hạn: nhập lại mã, giữ email
     } finally {
       setBusy(false);
       captchaRef.current?.reset(); // token captcha chỉ dùng được một lần
@@ -106,7 +116,9 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
     </button>
   );
 
-  const submitLabel = mode === "login" ? "Đăng nhập" : mode === "register" ? "Tạo tài khoản" : "Đặt lại mật khẩu";
+  const submitLabel = mode === "login" ? "Đăng nhập" : mode === "register" ? "Tạo tài khoản"
+    : step === "email" ? "Gửi mã xác nhận" : "Đặt lại mật khẩu";
+  const askPassword = mode !== "forgot" || step === "code";
 
   return (
     <div className="auth-wrap">
@@ -128,9 +140,17 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
         {mode !== "login" && (
           <label>{mode === "forgot" ? "Email của tài khoản" : "Email (Gmail)"}
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email"
-                   placeholder="ten@gmail.com" autoFocus={mode === "forgot"} required />
+                   placeholder="ten@gmail.com" autoFocus={mode === "forgot"} required
+                   readOnly={mode === "forgot" && step === "code"} />
           </label>
         )}
+        {mode === "forgot" && step === "code" && (
+          <label>Mã xác nhận (6 số, gửi tới Gmail)
+            <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                   inputMode="numeric" autoComplete="one-time-code" placeholder="123456" autoFocus required />
+          </label>
+        )}
+        {askPassword && (
         <label>{mode === "forgot" ? "Mật khẩu mới" : "Mật khẩu"}
           <span className="pw-field">
             <input type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
@@ -138,7 +158,8 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
             {pwToggle}
           </span>
         </label>
-        {mode !== "login" && (
+        )}
+        {mode !== "login" && askPassword && (
           <label>{mode === "forgot" ? "Nhập lại mật khẩu mới" : "Xác nhận mật khẩu"}
             <input type={showPw ? "text" : "password"} value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />
           </label>
@@ -163,6 +184,11 @@ export default function AuthScreen({ onLogin }: { onLogin: (s: Session) => void 
                 title={captchaOn && !captchaToken ? "Hoàn thành captcha trước" : undefined}>
           {busy ? "Đang xử lý…" : submitLabel}
         </button>
+        {mode === "forgot" && step === "code" && (
+          <button type="button" className="auth-link" onClick={() => { setStep("email"); setCode(""); setError(null); setNotice(null); }}>
+            Chưa nhận được mã? Gửi lại hoặc đổi email
+          </button>
+        )}
         {mode === "forgot" && (
           <button type="button" className="auth-link" onClick={() => switchMode("login")}>← Quay lại đăng nhập</button>
         )}

@@ -19,9 +19,11 @@ def get_conn(request: Request):
 
 
 def current_user(request: Request, token: str = Depends(oauth2_scheme), conn=Depends(get_conn)) -> dict:
-    user_id = decode_token(token, request.app.state.settings.jwt_secret)
-    row = conn.execute("SELECT id, username FROM users WHERE id = ?", (user_id,)).fetchone() if user_id else None
-    if row is None:
+    decoded = decode_token(token, request.app.state.settings.jwt_secret)
+    row = conn.execute("SELECT id, username, token_version FROM users WHERE id = ?",
+                       (decoded[0],)).fetchone() if decoded else None
+    # token cap truoc lan doi mat khau gan nhat (token_version da tang) -> bi tu choi
+    if row is None or row["token_version"] != decoded[1]:
         raise HTTPException(status_code=401, detail="Chưa đăng nhập hoặc phiên đã hết hạn",
                             headers={"WWW-Authenticate": "Bearer"})
     return {"id": row["id"], "username": row["username"]}

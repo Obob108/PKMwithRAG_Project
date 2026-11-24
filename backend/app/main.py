@@ -10,13 +10,23 @@ from .core.config import Settings, get_settings
 from .core.db import connect, init_db
 from .core.ratelimit import RateLimiter
 from .services.embedding import Embedder
+from .services.mailer import ConsoleMailer, SmtpMailer
 from .services.vector_store import VectorStores
 
 log = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings | None = None, *, embedder=None, llm=None, stores=None) -> FastAPI:
-    """Nhan embedder/llm/stores tu ngoai de test (embedder gia, LLM gia, store gia)."""
+def _make_mailer(settings: Settings):
+    if settings.smtp_enabled:
+        return SmtpMailer(settings.smtp_host, settings.smtp_port, settings.smtp_user, settings.smtp_password,
+                          settings.smtp_from or None)
+    log.warning("Chua cau hinh SMTP_USER/SMTP_PASSWORD: ma quen mat khau se duoc in ra log thay vi gui email")
+    return ConsoleMailer()
+
+
+def create_app(settings: Settings | None = None, *, embedder=None, llm=None, stores=None,
+               mailer=None) -> FastAPI:
+    """Nhan embedder/llm/stores/mailer tu ngoai de test (ban gia)."""
     settings = settings or get_settings()
     real_embedder = embedder is None
 
@@ -40,7 +50,10 @@ def create_app(settings: Settings | None = None, *, embedder=None, llm=None, sto
     app.state.locks = {}
     app.state.login_limiter = RateLimiter(limit=10, window=300)   # chi dem lan dang nhap SAI
     app.state.register_limiter = RateLimiter(limit=5, window=3600)
-    app.state.reset_limiter = RateLimiter(limit=5, window=900)     # chi dem lan nhap SAI email khi quen mat khau
+    app.state.reset_limiter = RateLimiter(limit=5, window=900)       # nhap SAI ma OTP: 5 lan/15 phut/IP
+    app.state.forgot_ip_limiter = RateLimiter(limit=10, window=3600)  # xin ma: 10 lan/gio/IP
+    app.state.forgot_email_limiter = RateLimiter(limit=3, window=3600)  # xin ma: 3 lan/gio/email
+    app.state.mailer = mailer or _make_mailer(settings)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
     app.include_router(router)

@@ -32,6 +32,20 @@ class Settings(BaseSettings):
     hcaptcha_sitekey: str = ""
     hcaptcha_secret: str = ""
 
+    # Email (gui ma OTP quen mat khau). Gmail: SMTP_USER = dia chi Gmail, SMTP_PASSWORD = App Password 16 ky tu
+    # (bat xac minh 2 buoc roi tao tai https://myaccount.google.com/apppasswords). De trong = in email ra log.
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    reset_code_minutes: int = 10
+    reset_max_attempts: int = 5
+
+    @property
+    def smtp_enabled(self) -> bool:
+        return bool(self.smtp_user and self.smtp_password)
+
     @property
     def captcha_enabled(self) -> bool:
         return bool(self.hcaptcha_sitekey and self.hcaptcha_secret)

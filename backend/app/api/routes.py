@@ -21,6 +21,8 @@ from ..core.db import connect
 from ..core.security import create_token, hash_password, verify_password
 from ..services import attachments as att_svc
 from ..services import notes as notes_svc
+from ..services import password_reset as reset_svc
+from ..services.mailer import reset_email
 from ..services.indexer import delete_note as delete_note_index
 from ..services.indexer import index_note
 from ..services.llm import LLMBusy
@@ -61,8 +63,14 @@ class RegisterRequest(BaseModel):
     captcha_token: str | None = Field(default=None, max_length=8192)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=254)
+    captcha_token: str | None = Field(default=None, max_length=8192)
+
+
 class ResetPasswordRequest(BaseModel):
     email: str = Field(min_length=1, max_length=254)
+    code: str = Field(min_length=1, max_length=12)
     new_password: str = Field(min_length=8, max_length=128)
     captcha_token: str | None = Field(default=None, max_length=8192)
 
@@ -123,9 +131,10 @@ def _check_captcha(request: Request, token: str | None) -> None:
         raise HTTPException(status_code=400, detail="Vui lòng hoàn thành captcha")
 
 
-def _token_for(request: Request, user_id: int) -> dict:
+def _token_for(request: Request, user_id: int, version: int = 0) -> dict:
     s = request.app.state.settings
-    return {"access_token": create_token(user_id, s.jwt_secret, s.jwt_expire_minutes), "token_type": "bearer"}
+    return {"access_token": create_token(user_id, s.jwt_secret, s.jwt_expire_minutes, version),
+            "token_type": "bearer"}
 
 
 @router.get("/config")
@@ -143,12 +152,13 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(),
     if limiter.blocked(key):
         raise HTTPException(status_code=429, detail="Đăng nhập sai quá nhiều lần, thử lại sau vài phút")
     _check_captcha(request, captcha_token)
-    row = conn.execute("SELECT id, password_hash FROM users WHERE username = ?", (form.username,)).fetchone()
+    row = conn.execute("SELECT id, password_hash, token_version FROM users WHERE username = ?",
+                       (form.username,)).fetchone()
     if row is None or not verify_password(row["password_hash"], form.password):
         limiter.hit(key)
         raise HTTPException(status_code=401, detail="Sai tên đăng nhập hoặc mật khẩu")
     limiter.reset(key)
-    return _token_for(request, row["id"])
+    return _token_for(request, row["id"], row["token_version"])
 
 
 @router.post("/auth/register", status_code=201)
@@ -181,24 +191,66 @@ def register(body: RegisterRequest, request: Request, conn=Depends(get_conn)):
     return _token_for(request, cur.lastrowid)
 
 
+FORGOT_MESSAGE = ("Nếu email này thuộc một tài khoản, mã xác nhận đã được gửi tới hộp thư. "
+                  "Hãy kiểm tra cả thư mục Spam.")
+RESET_FAILED = "Mã xác nhận không đúng hoặc đã hết hạn"
+
+
+def _send_reset_mail(mailer, to: str, username: str, code: str, minutes: int) -> None:
+    """Chay nen sau khi da tra loi request: thoi gian phan hoi khong de lo email co ton tai hay khong."""
+    try:
+        mailer.send(to, *reset_email(username, code, minutes))
+    except Exception:  # noqa: BLE001
+        log.exception("Khong gui duoc email dat lai mat khau")
+
+
+@router.post("/auth/forgot-password")
+def forgot_password(body: ForgotPasswordRequest, request: Request, background: BackgroundTasks,
+                    conn=Depends(get_conn)):
+    """Buoc 1 quen mat khau: gui ma OTP toi email cua tai khoan.
+    Luon tra CUNG MOT cau tra loi du email co ton tai hay khong (khong cho do tai khoan)."""
+    st = request.app.state
+    s = st.settings
+    ip = _client_ip(request)
+    if st.forgot_ip_limiter.blocked(ip):
+        raise HTTPException(status_code=429, detail="Yêu cầu quá nhiều lần, thử lại sau ít phút")
+    _check_captcha(request, body.captcha_token)
+    email = normalize_gmail(body.email)
+    if email is None:
+        raise HTTPException(status_code=422, detail="Email phải đúng định dạng Gmail (vd: ten@gmail.com)")
+    st.forgot_ip_limiter.hit(ip)
+    # Gioi han theo email (ke ca email khong ton tai, de hanh vi giong nhau): chong spam hop thu nguoi khac.
+    if st.forgot_email_limiter.blocked(email):
+        return {"detail": FORGOT_MESSAGE}
+    st.forgot_email_limiter.hit(email)
+    row = conn.execute("SELECT id, username FROM users WHERE email = ?", (email,)).fetchone()
+    if row is not None:
+        code = reset_svc.issue_code(conn, row["id"], s.jwt_secret, ttl_seconds=s.reset_code_minutes * 60)
+        background.add_task(_send_reset_mail, st.mailer, email, row["username"], code, s.reset_code_minutes)
+    return {"detail": FORGOT_MESSAGE}
+
+
 @router.post("/auth/reset-password")
 def reset_password(body: ResetPasswordRequest, request: Request, conn=Depends(get_conn)):
-    """Quen mat khau: nhap dung email cua tai khoan + mat khau moi thi doi mat khau.
-    Khong tu dang nhap: nguoi dung quay lai man dang nhap voi mat khau moi."""
-    limiter = request.app.state.reset_limiter
-    key = _client_ip(request)
-    if limiter.blocked(key):
-        raise HTTPException(status_code=429, detail="Nhập sai email quá nhiều lần, thử lại sau ít phút")
+    """Buoc 2: email + ma OTP + mat khau moi. Dung ma -> doi mat khau, tang token_version (dang xuat moi
+    phien cu), xoa ma. Moi loi deu tra cung mot thong bao de khong lo tai khoan nao ton tai."""
+    st = request.app.state
+    s = st.settings
+    ip = _client_ip(request)
+    if st.reset_limiter.blocked(ip):
+        raise HTTPException(status_code=429, detail="Nhập sai quá nhiều lần, thử lại sau ít phút")
     _check_captcha(request, body.captcha_token)
     email = normalize_gmail(body.email)
     row = conn.execute("SELECT id, username FROM users WHERE email = ?", (email,)).fetchone() if email else None
-    if row is None:
-        limiter.hit(key)
-        raise HTTPException(status_code=404, detail="Email không khớp với tài khoản nào")
-    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(body.new_password), row["id"]))
+    if row is None or not reset_svc.verify_code(conn, row["id"], body.code, s.jwt_secret,
+                                                max_attempts=s.reset_max_attempts):
+        st.reset_limiter.hit(ip)
+        raise HTTPException(status_code=400, detail=RESET_FAILED)
+    conn.execute("UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
+                 (hash_password(body.new_password), row["id"]))
     conn.commit()
-    # mo khoa dang nhap cho tai khoan nay (neu truoc do bi chan vi nhap sai nhieu lan)
-    request.app.state.login_limiter.reset(f"{key}|{row['username'].lower()}")
+    st.reset_limiter.reset(ip)
+    st.login_limiter.reset(f"{ip}|{row['username'].lower()}")  # mo khoa dang nhap neu truoc do bi chan
     return {"username": row["username"]}
 
 

@@ -127,13 +127,24 @@ export async function register(base: string, username: string, email: string, pa
   return sessionFromToken(base, access_token);
 }
 
-/** Quên mật khẩu: email phải khớp tài khoản. Không tự đăng nhập; trả về tên đăng nhập để điền sẵn. */
-export async function resetPassword(base: string, email: string, newPassword: string,
+/** Quên mật khẩu, bước 1: xin mã OTP gửi về email. Máy chủ luôn trả cùng một thông báo (không lộ email nào có tài khoản). */
+export async function forgotPassword(base: string, email: string, captchaToken?: string): Promise<string> {
+  const res = await doFetch(`${base}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, captcha_token: captchaToken || null }),
+  });
+  if (!res.ok) throw await readError(res);
+  return ((await res.json()) as { detail: string }).detail;
+}
+
+/** Quên mật khẩu, bước 2: email + mã OTP + mật khẩu mới. Không tự đăng nhập; trả về tên đăng nhập để điền sẵn. */
+export async function resetPassword(base: string, email: string, code: string, newPassword: string,
                                     captchaToken?: string): Promise<{ username: string }> {
   const res = await doFetch(`${base}/api/auth/reset-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, new_password: newPassword, captcha_token: captchaToken || null }),
+    body: JSON.stringify({ email, code, new_password: newPassword, captcha_token: captchaToken || null }),
   });
   if (!res.ok) throw await readError(res);
   return (await res.json()) as { username: string };

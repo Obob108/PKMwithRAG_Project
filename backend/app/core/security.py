@@ -19,13 +19,16 @@ def verify_password(stored_hash: str, password: str) -> bool:
         return False
 
 
-def create_token(user_id: int, secret: str, minutes: int) -> str:
+def create_token(user_id: int, secret: str, minutes: int, version: int = 0) -> str:
+    """`ver` = users.token_version luc cap token; doi mat khau thi tang token_version nen token cu het hieu luc."""
     exp = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    return jwt.encode({"sub": str(user_id), "exp": exp}, secret, algorithm="HS256")
+    return jwt.encode({"sub": str(user_id), "ver": version, "exp": exp}, secret, algorithm="HS256")
 
 
-def decode_token(token: str, secret: str) -> int | None:
+def decode_token(token: str, secret: str) -> tuple[int, int] | None:
+    """(user_id, token_version) neu token hop le; token cu chua co `ver` coi nhu ver = 0."""
     try:
-        return int(jwt.decode(token, secret, algorithms=["HS256"])["sub"])
-    except (jwt.PyJWTError, KeyError, ValueError):
+        claims = jwt.decode(token, secret, algorithms=["HS256"])
+        return int(claims["sub"]), int(claims.get("ver", 0))
+    except (jwt.PyJWTError, KeyError, ValueError, TypeError):
         return None

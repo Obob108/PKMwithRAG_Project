@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HttpApi, isGmail, login, parseSseBlock, register, resetPassword } from "../src/lib/api.ts";
+import { forgotPassword, HttpApi, isGmail, login, parseSseBlock, register, resetPassword } from "../src/lib/api.ts";
 import { ApiError, NetworkError } from "../src/lib/types.ts";
 import type { RemoteEvent } from "../src/lib/types.ts";
 
@@ -64,13 +64,18 @@ test("login and register build a session via /api/me", async () => {
   await assert.rejects(() => login("", "a", "b"), (e: unknown) => e instanceof ApiError && e.detail.includes("Sai"));
 });
 
-test("resetPassword posts email + new password; isGmail only accepts Gmail", async () => {
-  const calls = stub(() => json({ username: "alice" }));
-  assert.deepEqual(await resetPassword("", "alice@gmail.com", "mat-khau-moi"), { username: "alice" });
+test("forgotPassword asks for a code; resetPassword sends email + code + new password; isGmail only accepts Gmail", async () => {
+  let calls = stub(() => json({ detail: "Nếu email này thuộc một tài khoản, mã xác nhận đã được gửi" }));
+  assert.match(await forgotPassword("", "alice@gmail.com"), /mã xác nhận/);
+  assert.equal(calls[0].url, "/api/auth/forgot-password");
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { email: "alice@gmail.com", captcha_token: null });
+  calls = stub(() => json({ username: "alice" }));
+  assert.deepEqual(await resetPassword("", "alice@gmail.com", "123456", "mat-khau-moi"), { username: "alice" });
   assert.equal(calls[0].url, "/api/auth/reset-password");
-  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { email: "alice@gmail.com", new_password: "mat-khau-moi", captcha_token: null });
-  stub(() => json({ detail: "Email không khớp với tài khoản nào" }, 404));
-  await assert.rejects(() => resetPassword("", "x@gmail.com", "mat-khau-moi"), (e: unknown) => e instanceof ApiError && e.status === 404);
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)),
+    { email: "alice@gmail.com", code: "123456", new_password: "mat-khau-moi", captcha_token: null });
+  stub(() => json({ detail: "Mã xác nhận không đúng hoặc đã hết hạn" }, 400));
+  await assert.rejects(() => resetPassword("", "alice@gmail.com", "000000", "mat-khau-moi"), (e: unknown) => e instanceof ApiError && e.status === 400);
   assert.ok(isGmail(" Ten.Ho@Gmail.com"));
   for (const bad of ["a@yahoo.com", "a@gmail.co", ".a@gmail.com", "a..b@gmail.com", "agmail.com"]) assert.ok(!isGmail(bad), bad);
 });
