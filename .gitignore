@@ -19,3 +19,9 @@ build/
 .vscode/
 .idea/
 *.patch
+
+# ban sao luu (scripts/backup.sh)
+backups/
+
+# du lieu that (CSDL SQLite, FAISS, PDF, anh): KHONG dua len GitHub
+data/

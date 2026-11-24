@@ -103,6 +103,14 @@ def _replace_index(conn, store, note, chunks, vectors, link_top_k, link_threshol
         hits = [(cid, s) for cid, s in hits if cid not in old_set and s >= link_threshold]
         neighbors.append(hits[:link_top_k])
 
+    # 1b) Canh semantic tu ghi chu KHAC tro vao chunk cu cua ghi chu nay. Chung se bi xoa theo chunk cu
+    #     (ON DELETE CASCADE), nen ghi lai de noi lai o buoc 4b.
+    incoming = conn.execute(
+        "SELECT DISTINCT src_note, src_chunk FROM links WHERE user_id = ? AND type = 'semantic' "
+        "AND dst_note = ? AND src_note != ? AND src_chunk IS NOT NULL",
+        (user_id, note_id, note_id),
+    ).fetchall()
+
     # 2) Xoa chunk cu (cascade xoa canh tro toi chunk cu) va canh xuat phat tu ghi chu nay.
     conn.execute("DELETE FROM links WHERE src_note = ?", (note_id,))
     conn.execute("DELETE FROM chunks WHERE note_id = ?", (note_id,))
@@ -141,6 +149,29 @@ def _replace_index(conn, store, note, chunks, vectors, link_top_k, link_threshol
                 "INSERT INTO links(user_id, src_note, dst_note, src_chunk, dst_chunk, type, score, status) "
                 "VALUES (?, ?, ?, ?, ?, 'semantic', ?, ?)",
                 (user_id, note_id, dst_note, src_chunk, dst_chunk, score, decided.get(dst_note, "suggested")),
+            )
+
+    # 4b) Noi lai canh tu ghi chu khac: chunk nguon cu tro toi chunk MOI giong no nhat, neu van vuot nguong.
+    #     Truoc day lap chi muc lai X lam mat cac canh nay cho den khi ghi chu kia duoc lap chi muc lai
+    #     (vd B coi X la lang gieng gan nhat, nhung X sau khi sua lai co lang gieng gan hon B).
+    if len(vectors) and incoming:
+        have = {(src, dst) for src, hits in zip(new_ids, neighbors) for dst, _ in hits}
+        for r in incoming:
+            src_chunk = r["src_chunk"]
+            try:
+                v = np.asarray(store.get_vector(src_chunk), dtype="float32").ravel()
+            except Exception:  # noqa: BLE001  chunk nguon khong con vector
+                continue
+            scores = vectors @ v
+            j = int(np.argmax(scores))
+            score = float(scores[j])
+            if score < link_threshold or (new_ids[j], src_chunk) in have:
+                continue
+            conn.execute(
+                "INSERT INTO links(user_id, src_note, dst_note, src_chunk, dst_chunk, type, score, status) "
+                "VALUES (?, ?, ?, ?, ?, 'semantic', ?, ?)",
+                (user_id, r["src_note"], note_id, src_chunk, new_ids[j], score,
+                 decided.get(r["src_note"], "suggested")),
             )
 
     # 5) Canh wiki [[tieu de]] (dst_note NULL neu chua co ghi chu).

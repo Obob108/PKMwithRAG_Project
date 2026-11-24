@@ -17,9 +17,9 @@ dữ liệu gửi tới API Gemini không phải vấn đề.
 - Vector index: FAISS IndexFlatIP + IndexIDMap, mỗi user một file (id = chunks.id)
 - Đồ thị: NetworkX (dựng từ bảng links khi cần vẽ/phân tích)
 - PDF: PyMuPDF, chỉ trích text, không OCR
-- LLM: Gemini qua lớp LLMClient (đổi nhà cung cấp chỉ sửa cấu hình)
-- Auth: JWT, mật khẩu argon2, tài khoản tạo bằng script, không đăng ký công khai
-- Frontend: React + Vite + TypeScript, CodeMirror 6, force-graph, PWA tối thiểu
+- LLM: Gemini qua lớp LLMClient (đổi nhà cung cấp chỉ sửa cấu hình); model chọn bằng GEMINI_MODEL trong .env (mặc định trong config.py), có GEMINI_FALLBACK_MODELS khi quá tải
+- Auth: JWT (có token_version để thu hồi), mật khẩu argon2; đăng ký trên web bằng Gmail (tắt được bằng ALLOW_REGISTRATION, mã mời INVITE_CODE), quên mật khẩu bằng mã OTP gửi email; script create_user cho quản trị
+- Frontend: React 18 + Vite + TypeScript, trình soạn thảo Markdown tự viết (textarea + thanh định dạng), graph vẽ trên canvas bằng mô phỏng lực tự viết (graphModel.ts, không dùng thư viện force-graph), KaTeX cho công thức, PWA tối thiểu
 
 ## 3. Dữ liệu (xem backend/app/core/db.py)
 users, notes (status: pending/indexing/ready/failed), chunks (id = ID vector FAISS),
@@ -176,7 +176,7 @@ Máy chủ là nguồn sự thật. Mỗi ghi chú có `version` tăng dần; m�
   Liên kết, scripts/link_precision.py (precision theo τ từ nhãn ✓/✗).
   LƯU Ý ĐÁNH GIÁ: cạnh bị bỏ qua không còn được mở rộng khi truy hồi, nên số liệu run_eval sau khi bấm ✗ không còn so được trực tiếp với các lần chạy cũ.
 - [x] Graph view nâng cấp (màu thư mục, tìm 3 kiểu, lọc thẻ/loại liên kết, mật độ Ít/Vừa/Nhiều, hover, xem trước, local graph).
-  Chạy thật trong Chrome (React 19 + server thử dùng notes.py thật trên bản sao app.db, có gợi ý ✓/✗), kể cả màn hình điện thoại.
+  Chạy thật trong Chrome (server thử dùng notes.py thật trên bản sao app.db, có gợi ý ✓/✗), kể cả màn hình điện thoại.
 - [ ] Việc còn lại: kiểm thử tay trên trình duyệt + điện thoại, chọn τ (sample_links), chấm tay chất lượng câu trả lời, thêm ghi chú đa chủ đề, deploy VPS (để sau).
 
 Ghi chú thiết kế:
@@ -203,3 +203,16 @@ Ghi chú thiết kế:
 - `scripts/migrate_sqlite_to_pg.py`: chép toàn bộ dữ liệu + vector FAISS, giữ nguyên id, một giao dịch.
 - Kiểm thử: `TEST_DATABASE_URL` chạy cùng bộ test trên PostgreSQL thật (tests/dbutil.py); test nâng cấp schema SQLite
   cũ chỉ chạy với SQLite; test pgvector cần extension `vector` (docker-compose.yml).
+
+## 14. Gia cố (24/11)
+- ENVIRONMENT=production: không khởi động nếu JWT_SECRET yếu hoặc DATABASE_URL còn mật khẩu mặc định (config.check_production).
+- Lịch sử phiên bản giữ 50 bản gần nhất mỗi ghi chú (notes.KEEP_VERSIONS); thiết bị ngoại tuyến gửi base_version đã bị
+  dọn vẫn không mất dữ liệu (giữ cả hai bản trong khối xung đột).
+- Lập chỉ mục lại ghi chú X nối lại các cạnh semantic từ ghi chú khác trỏ vào X (tới chunk mới giống nhất, nếu còn
+  vượt ngưỡng, giữ trạng thái ✓/✗), thay vì mất theo chunk cũ.
+- Khóa lập chỉ mục theo người dùng: threading.Lock + advisory lock PostgreSQL (đúng cả khi chạy nhiều tiến trình).
+- Frontend: mỗi tab một mã thiết bị (hai tab cùng trình duyệt đồng bộ trực tiếp với nhau); người dùng bấm Đăng xuất thì
+  xóa kho IndexedDB của tài khoản trên trình duyệt (phiên hết hạn thì giữ, để không mất thay đổi ngoại tuyến).
+- scripts/backup.sh (pg_dump + uploads, giữ 14 ngày), scripts/cleanup_attachments.py (ảnh mồ côi).
+- Giới hạn còn lại: bộ giới hạn tốc độ đăng nhập/đăng ký nằm trong RAM (một tiến trình); token lưu localStorage
+  (giảm rủi ro XSS bằng cách không dùng innerHTML; chặt hơn là cookie HttpOnly).

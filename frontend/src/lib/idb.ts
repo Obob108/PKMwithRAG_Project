@@ -36,5 +36,30 @@ export function openIdbStore(dbName: string): Store {
     setMeta: async (key, value) => {
       await run("meta", "readwrite", (s) => s.put(value, key));
     },
+    close: () => {
+      void dbp.then((db) => db.close()).catch(() => undefined);
+    },
   };
+}
+
+/** Xóa hẳn kho ghi chú cục bộ (khi người dùng chủ động đăng xuất: máy dùng chung không còn bản sao ghi chú).
+ *  Nếu tab khác còn mở kho này, trình duyệt chờ tab đó đóng rồi mới xóa; quá `timeoutMs` thì thôi chờ. */
+export function deleteIdbStore(dbName: string, timeoutMs = 5000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (!done) {
+        done = true;
+        resolve(ok);
+      }
+    };
+    try {
+      const req = indexedDB.deleteDatabase(dbName);
+      req.onsuccess = () => finish(true);
+      req.onerror = () => finish(false);
+      setTimeout(() => finish(false), timeoutMs);
+    } catch {
+      finish(false);
+    }
+  });
 }

@@ -78,6 +78,8 @@ export interface Store {
   remove(key: string): Promise<void>;
   getMeta(key: string): Promise<unknown>;
   setMeta(key: string, value: unknown): Promise<void>;
+  /** Đóng kết nối (IndexedDB) khi không dùng nữa; cần trước khi xóa cơ sở dữ liệu. */
+  close?(): void;
 }
 
 export class NetworkError extends Error {}

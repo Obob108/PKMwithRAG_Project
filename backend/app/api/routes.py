@@ -100,7 +100,7 @@ def run_index(app, user_id: int, note_id: int) -> None:
     """Lap chi muc o nen, voi ket noi rieng; tuan tu theo tung user."""
     s = app.state.settings
     try:
-        with user_lock(app, user_id), app.state.db.connection() as conn:
+        with app.state.db.connection() as conn, user_lock(app, user_id, conn):
             index_note(conn, app.state.stores, app.state.embedder, note_id,
                        link_top_k=s.link_top_k, link_threshold=s.link_threshold)
     except ValueError:
@@ -394,7 +394,7 @@ def delete_note(note_id: int, request: Request, user: dict = Depends(current_use
         notes_svc.get_note(conn, user["id"], note_id)  # kiem tra quyen so huu truoc khi xoa vector
     except notes_svc.NotFound:
         raise _not_found()
-    with user_lock(request.app, user["id"]):
+    with user_lock(request.app, user["id"], conn):
         delete_note_index(conn, request.app.state.stores, note_id, device_id=x_device_id,
                           upload_dir=request.app.state.settings.upload_dir)
     return Response(status_code=204)

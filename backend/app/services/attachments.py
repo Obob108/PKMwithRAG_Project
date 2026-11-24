@@ -80,3 +80,31 @@ def get(conn, user_id: int, upload_dir: Path, name: str) -> tuple[Path, str]:
     if path is None or not path.is_file():
         raise NotFound(name)
     return path, row["mime"]
+
+
+def orphans(conn) -> list[dict]:
+    """Anh khong con ghi chu nao (cua chinh chu so huu) nhung bang ![[ten]] / ![[ten|rong]].
+    Xoa ghi chu khong xoa anh vi mot anh co the dung o nhieu ghi chu; ham nay tim nhung anh da bi bo roi."""
+    contents: dict[int, list[str]] = {}
+    for r in conn.execute("SELECT user_id, content FROM notes"):
+        contents.setdefault(r["user_id"], []).append(r["content"])
+    out = []
+    for r in conn.execute("SELECT id, user_id, name, file_path, size FROM attachments ORDER BY id"):
+        refs = (f"![[{r['name']}]]", f"![[{r['name']}|")
+        if not any(ref in c for c in contents.get(r["user_id"], []) for ref in refs):
+            out.append({"id": r["id"], "user_id": r["user_id"], "name": r["name"], "file_path": r["file_path"],
+                        "size": r["size"]})
+    return out
+
+
+def delete_orphans(conn, upload_dir: Path) -> list[dict]:
+    """Xoa anh mo coi (dong trong CSDL + file). Tra ve danh sach da xoa."""
+    gone = orphans(conn)
+    for a in gone:
+        conn.execute("DELETE FROM attachments WHERE id = ?", (a["id"],))
+    conn.commit()
+    for a in gone:  # xoa file SAU khi CSDL da commit: loi giua chung chi de lai file thua, khong mat anh dang dung
+        path = resolve_file(Path(upload_dir), a["file_path"])
+        if path is not None:
+            path.unlink(missing_ok=True)
+    return gone

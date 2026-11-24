@@ -1,9 +1,9 @@
-import threading
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 
 from ..core.security import decode_token
+from ..services.locks import user_lock  # noqa: F401  (routes import tu day)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -34,11 +34,6 @@ def current_user_brief(request: Request, token: str = Depends(oauth2_scheme)) ->
     song hang phut: neu giu ket noi ca luong thi vai chuc thiet bi la can connection pool."""
     with request.app.state.db.connection() as conn:
         return _user_from_token(conn, request, token)
-
-
-def user_lock(app, user_id: int) -> threading.Lock:
-    """Khoa theo user: chi mot tac vu lap chi muc / xoa vector chay cung luc cho moi user."""
-    return app.state.locks.setdefault(user_id, threading.Lock())
 
 
 def get_llm(request: Request):

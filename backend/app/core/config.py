@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     def gemini_fallbacks(self) -> list[str]:
         return [m.strip() for m in self.gemini_fallback_models.split(",") if m.strip()]
 
+    # "production" (tren VPS): tu choi khoi dong neu cau hinh khong an toan (xem check_production)
+    environment: str = "development"
+
     # Auth
     jwt_secret: str = "change-me"
     jwt_expire_minutes: int = 60 * 24 * 7
@@ -97,6 +100,27 @@ class Settings(BaseSettings):
     @property
     def upload_dir(self) -> Path:
         return self.data_dir / "uploads"
+
+
+WEAK_SECRETS = {"", "change-me", "change-me-to-a-long-random-string", "secret", "test-secret"}
+
+
+def config_problems(s: Settings) -> list[str]:
+    """Nhung cau hinh nguy hiem khi chay that. Rong = on."""
+    problems = []
+    if s.jwt_secret in WEAK_SECRETS or len(s.jwt_secret) < 32:
+        problems.append("JWT_SECRET qua ngan hoac la gia tri mac dinh: ai cung tu ky duoc token. Tao bang "
+                        "python -c \"import secrets; print(secrets.token_urlsafe(48))\"")
+    if s.uses_postgres and ":pkm@" in s.database_url:
+        problems.append("DATABASE_URL dang dung mat khau mac dinh 'pkm' cua docker-compose.yml")
+    return problems
+
+
+def check_production(s: Settings) -> None:
+    """ENVIRONMENT=production: co van de thi dung han (khong chay voi cau hinh khong an toan)."""
+    problems = config_problems(s)
+    if s.environment == "production" and problems:
+        raise RuntimeError("Cau hinh khong an toan cho moi truong production:\n- " + "\n- ".join(problems))
 
 
 @lru_cache

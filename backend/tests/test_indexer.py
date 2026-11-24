@@ -117,3 +117,41 @@ def test_note_without_content_is_ready_with_no_chunks():
     nid = upsert_note(conn, 1, "Rong", "")
     assert index_note(conn, stores, emb, nid) == "ready"
     assert _count(conn, "SELECT COUNT(*) FROM chunks") == 0
+
+
+def test_reindex_keeps_incoming_links_from_other_notes():
+    """B coi A la lang gieng gan nhat (canh B->A). Sua A khien lang gieng gan nhat cua A la C chu khong phai B:
+    truoc day canh B->A mat theo chunk cu cua A; bay gio duoc noi lai toi chunk moi cua A."""
+    conn, stores, emb = _setup()
+    a = upsert_note(conn, 1, "A", "alpha beta gamma delta")
+    index_note(conn, stores, emb, a, link_top_k=1, link_threshold=0.4)
+    b = upsert_note(conn, 1, "B", "alpha beta zeta eta")
+    index_note(conn, stores, emb, b, link_top_k=1, link_threshold=0.4)
+    c = upsert_note(conn, 1, "C", "alpha beta gamma delta epsilon")
+    index_note(conn, stores, emb, c, link_top_k=1, link_threshold=0.4)
+    assert _count(conn, "SELECT COUNT(*) FROM links WHERE src_note = ? AND dst_note = ?", b, a) == 1
+
+    upsert_note(conn, 1, "A", "alpha beta gamma delta theta")
+    index_note(conn, stores, emb, a, link_top_k=1, link_threshold=0.4)
+    rows = conn.execute("SELECT src_note, dst_note, dst_chunk FROM links WHERE type = 'semantic' "
+                        "AND ((src_note = ? AND dst_note = ?) OR (src_note = ? AND dst_note = ?))", (b, a, a, b)).fetchall()
+    assert len(rows) == 1 and rows[0]["src_note"] == b
+    new_chunk = conn.execute("SELECT id FROM chunks WHERE note_id = ?", (a,)).fetchone()[0]
+    assert rows[0]["dst_chunk"] == new_chunk  # tro toi chunk MOI cua A
+
+
+def test_reindex_does_not_relink_when_no_longer_similar_and_keeps_rejection():
+    conn, stores, emb = _setup()
+    a = upsert_note(conn, 1, "A", "alpha beta gamma delta")
+    index_note(conn, stores, emb, a, link_top_k=1, link_threshold=0.4)
+    b = upsert_note(conn, 1, "B", "alpha beta zeta eta")
+    index_note(conn, stores, emb, b, link_top_k=1, link_threshold=0.4)
+    from app.services import notes as notes_svc
+    notes_svc.set_link_status(conn, 1, b, a, "rejected")
+    upsert_note(conn, 1, "A", "alpha beta gamma delta theta")
+    index_note(conn, stores, emb, a, link_top_k=1, link_threshold=0.4)
+    st = conn.execute("SELECT status FROM links WHERE type = 'semantic' AND src_note = ? AND dst_note = ?", (b, a)).fetchone()
+    assert st is None or st[0] == "rejected"  # khong bao gio song lai thanh 'suggested'
+    upsert_note(conn, 1, "A", "pho bo hanh tay que")  # khong con giong B
+    index_note(conn, stores, emb, a, link_top_k=1, link_threshold=0.4)
+    assert _count(conn, "SELECT COUNT(*) FROM links WHERE type = 'semantic' AND src_note = ? AND dst_note = ?", b, a) == 0

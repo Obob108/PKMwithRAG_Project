@@ -53,3 +53,23 @@ def test_image_embeds_are_not_wikilinks_and_not_embedded():
     assert extract_wikilinks(text) == ["RAG", "Ghi chu nhung"]
     c = Chunk(0, "H", text)
     assert "Pasted image" not in c.embed_text() and "a.JPG" not in c.embed_text() and "[[RAG]]" in c.embed_text()
+
+
+def test_orphan_images_found_and_deleted_only_when_unused(tmp_path):
+    from app.services import notes
+
+    conn = _conn()
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 20
+    used = att.save(conn, 1, tmp_path, png, "dung.png")["name"]
+    sized = att.save(conn, 1, tmp_path, png, "co-do-rong.png")["name"]
+    orphan = att.save(conn, 1, tmp_path, png, "bo-roi.png")["name"]
+    other_user = att.save(conn, 2, tmp_path, png, "dung.png")["name"]  # ten trung nhung cua nguoi khac
+    notes.create_note(conn, 1, "N", f"![[{used}]] va ![[{sized}|300]]")
+    names = sorted(a["name"] for a in att.orphans(conn))
+    assert names == sorted([orphan, other_user])  # anh cua user 2 khong duoc ghi chu cua user 1 "cuu"
+    files_before = {p.name for p in tmp_path.rglob("*.png")}
+    gone = att.delete_orphans(conn, tmp_path)
+    assert {a["name"] for a in gone} == {orphan, other_user}
+    assert len({p.name for p in tmp_path.rglob("*.png")}) == len(files_before) - 2
+    assert att.orphans(conn) == []
+    att.get(conn, 1, tmp_path, used)  # anh dang dung van con

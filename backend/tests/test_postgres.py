@@ -139,3 +139,34 @@ def test_pgvector_store_matches_exact_inner_product_search_and_is_transactional(
     assert hits[0][1] == pytest.approx(0.9, abs=1e-6)
     assert np.allclose(store.get_vector(ids[2]), vecs[2])
     db.close()
+
+
+@needs_pg
+def test_index_lock_is_shared_across_processes():
+    """Hai 'tien trinh' (hai app, hai ket noi): khoa PostgreSQL bat tien trinh thu hai cho, khoa trong RAM thi khong."""
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from app.services.locks import user_lock
+
+    reset_pg(TEST_PG)
+    app1 = SimpleNamespace(state=SimpleNamespace(locks={}))
+    app2 = SimpleNamespace(state=SimpleNamespace(locks={}))
+    c1, c2 = connect(TEST_PG), connect(TEST_PG)
+    got = threading.Event()
+
+    def second():
+        with user_lock(app2, 5, c2):
+            got.set()
+
+    with user_lock(app1, 5, c1):
+        t = threading.Thread(target=second)
+        t.start()
+        time.sleep(0.5)
+        assert not got.is_set()  # dang bi chan boi tien trinh 1
+    assert got.wait(3)
+    t.join(3)
+    with user_lock(app1, 6, c1):  # nguoi dung khac khong bi anh huong
+        pass
+    c1.close(), c2.close()

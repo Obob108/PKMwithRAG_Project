@@ -95,3 +95,13 @@ Remove-Item Env:TEST_DATABASE_URL           # quay về chạy test trên SQLite
 ```
 Khác biệt khi chạy PostgreSQL: connection pool (`DB_POOL_SIZE`), đồng bộ trực tiếp bằng LISTEN/NOTIFY (không còn
 hỏi CSDL mỗi giây), vector nằm chung bảng `chunks` và ghi cùng transaction với nội dung.
+
+## Triển khai lên VPS (ghi chú)
+- `backend/.env`: `ENVIRONMENT=production`, `JWT_SECRET` dài ngẫu nhiên, đổi mật khẩu PostgreSQL trong
+  `docker-compose.yml` và `DATABASE_URL` (backend từ chối khởi động nếu còn cấu hình mặc định).
+- Đặt Nginx/Caddy (HTTPS) trước uvicorn và gửi header `X-Forwarded-For`. uvicorn mặc định tin header này từ
+  127.0.0.1 (`--forwarded-allow-ips`), nhờ đó giới hạn đăng nhập/đăng ký tính đúng theo IP người dùng chứ không
+  phải IP của Nginx.
+- Sao lưu hằng ngày: `bash backend/scripts/backup.sh` (pg_dump + thư mục uploads, giữ 14 ngày; cách đặt cron và
+  khôi phục ghi ở đầu file).
+- Dọn ảnh không còn ghi chú nào dùng: `python scripts/cleanup_attachments.py` (liệt kê), thêm `--apply` để xóa.

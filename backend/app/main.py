@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import router
-from .core.config import Settings, get_settings
+from .core.config import Settings, check_production, config_problems, get_settings
 from .core.db import Database
 from .core.ratelimit import RateLimiter
 from .services.embedding import Embedder
@@ -29,6 +29,7 @@ def create_app(settings: Settings | None = None, *, embedder=None, llm=None, sto
                mailer=None) -> FastAPI:
     """Nhan embedder/llm/stores/mailer tu ngoai de test (ban gia)."""
     settings = settings or get_settings()
+    check_production(settings)  # ENVIRONMENT=production ma cau hinh khong an toan -> khong khoi dong
     real_embedder = embedder is None
 
     @asynccontextmanager
@@ -42,8 +43,8 @@ def create_app(settings: Settings | None = None, *, embedder=None, llm=None, sto
             app.state.event_hub = EventHub(db.target)
             app.state.event_hub.start()
         settings.upload_dir.mkdir(parents=True, exist_ok=True)
-        if settings.jwt_secret == "change-me":
-            log.warning("JWT_SECRET dang la gia tri mac dinh; dat mot chuoi ngau nhien dai trong .env")
+        for problem in config_problems(settings):  # moi truong phat trien: chi canh bao
+            log.warning(problem)
         if real_embedder:  # nap BGE-m3 san o luong nen de lan lap chi muc dau khong phai cho
             threading.Thread(target=app.state.embedder.encode, args=(["khoi dong"],), daemon=True).start()
         yield

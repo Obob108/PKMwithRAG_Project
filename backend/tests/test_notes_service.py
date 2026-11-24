@@ -502,3 +502,18 @@ def test_graph_nodes_carry_folder_name():
     by = {n["title"]: n for n in notes.graph(conn, 1)["nodes"]}
     assert (by["A"]["folder_id"], by["A"]["folder_name"]) == (f["id"], "RAG")
     assert (by["B"]["folder_id"], by["B"]["folder_name"]) == (None, None)
+
+
+def test_old_versions_are_pruned_but_offline_edit_on_pruned_base_loses_nothing(monkeypatch):
+    monkeypatch.setattr(notes, "KEEP_VERSIONS", 3)
+    conn = fresh_conn()
+    conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x')")
+    n = notes.create_note(conn, 1, "N", "v1\n")
+    for v in range(2, 7):
+        notes.update_note(conn, 1, n["id"], content=f"v{v}\n", base_version=v - 1)
+    kept = [r[0] for r in conn.execute("SELECT version FROM note_versions WHERE note_id = ? ORDER BY version", (n["id"],))]
+    assert kept == [4, 5, 6]
+    # Thiet bi ngoai tuyen tu phien ban 1 (da bi don): khong gop tu dong duoc nhung giu CA HAI ban
+    out = notes.update_note(conn, 1, n["id"], content="sua ngoai tuyen\n", base_version=1)
+    assert out["result"] == "conflict"
+    assert "v6" in out["note"]["content"] and "sua ngoai tuyen" in out["note"]["content"]

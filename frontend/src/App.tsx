@@ -15,7 +15,7 @@ import { DEMO_SESSION, DemoApi, MemoryStore } from "./lib/demo.ts";
 import { DEMO_NOTES, START_TITLE } from "./lib/demoData.ts";
 import type { Session } from "./lib/api.ts";
 import { SyncEngine } from "./lib/engine.ts";
-import { openIdbStore } from "./lib/idb.ts";
+import { deleteIdbStore, openIdbStore } from "./lib/idb.ts";
 import { startLive } from "./lib/live.ts";
 import type { LiveState } from "./lib/live.ts";
 import { buildLinkIndex, extractOutline, extractTags, fold, fuzzyFilter, wordCount } from "./lib/text.ts";
@@ -44,7 +44,7 @@ function writeSession(s: Session | null): void {
     // trình duyệt chặn bộ nhớ: phiên chỉ sống trong tab này
   }
 }
-function deviceId(): string {
+function browserId(): string {
   try {
     let id = localStorage.getItem(DEVICE_KEY);
     if (!id) {
@@ -56,6 +56,17 @@ function deviceId(): string {
     return uuid();
   }
 }
+// Mã thiết bị gửi lên máy chủ (X-Device-Id) để nhận ra sự kiện do CHÍNH MÌNH gây ra. Mỗi TAB một mã (mã trình
+// duyệt + phần ngẫu nhiên theo lần mở trang): nếu dùng chung một mã cho mọi tab, tab B bỏ qua thay đổi của tab A
+// vì tưởng là của mình, và chỉ thấy sau khi tải lại trang.
+const TAB_DEVICE_ID = `${browserId().slice(0, 8)}-${uuid().slice(0, 8)}`;
+function deviceId(): string {
+  return TAB_DEVICE_ID;
+}
+
+/** "user": người dùng bấm Đăng xuất → xóa luôn bản sao ghi chú trên trình duyệt.
+ *  "expired": phiên hết hạn / bị thu hồi → GIỮ bản sao (có thể còn thay đổi ngoại tuyến chưa gửi; đăng nhập lại sẽ gửi tiếp). */
+type LogoutReason = "user" | "expired";
 
 // ================================================================== vỏ: demo / đăng nhập → khởi động engine
 type AuthMode = "login" | "register";
@@ -69,11 +80,13 @@ export default function App() {
     setAuth(null);
     setSession(s);
   };
-  const logout = useCallback(() => {
+  const logout = useCallback((reason: LogoutReason = "user") => {
+    const uid = session?.userId;
     writeSession(null);
     setSession(null);
     setAuth("login");
-  }, []);
+    if (reason === "user" && uid != null) void deleteIdbStore(`pkm-${uid}`);
+  }, [session]);
   if (session) return <Boot key={session.userId} session={session} onLogout={logout} />;
   if (auth) return <AuthScreen key={auth} initialMode={auth} onLogin={login} onDemo={() => setAuth(null)} />;
   return <DemoBoot onAuth={setAuth} />;
@@ -124,7 +137,7 @@ interface Live {
   wake: () => void;
 }
 
-function Boot({ session, onLogout }: { session: Session; onLogout: () => void }) {
+function Boot({ session, onLogout }: { session: Session; onLogout: (reason?: LogoutReason) => void }) {
   const [live, setLive] = useState<Live | null>(null);
   const [state, setState] = useState<LiveState>("connecting");
   const logoutRef = useRef(onLogout);
@@ -133,8 +146,9 @@ function Boot({ session, onLogout }: { session: Session; onLogout: () => void })
   useEffect(() => {
     const dev = deviceId();
     const api = new HttpApi({ deviceId: dev, getToken: () => session.token });
-    const engine = new SyncEngine(api, openIdbStore(`pkm-${session.userId}`), { deviceId: dev });
-    engine.onUnauthorized = () => logoutRef.current();
+    const store = openIdbStore(`pkm-${session.userId}`);
+    const engine = new SyncEngine(api, store, { deviceId: dev });
+    engine.onUnauthorized = () => logoutRef.current("expired");
     let handle: { stop(): void; wake(): void } | null = null;
     let cancelled = false;
     void engine.init().then(() => {
@@ -149,6 +163,7 @@ function Boot({ session, onLogout }: { session: Session; onLogout: () => void })
       window.removeEventListener("online", onOnline);
       handle?.stop();
       engine.dispose();
+      void engine.writes.finally(() => store.close?.()); // ghi nốt rồi đóng (để đăng xuất xóa được kho)
       setLive(null);
     };
   }, [session]);
@@ -535,7 +550,10 @@ function Workspace({ session, onLogout, live, demo }: {
   );
 
   const logoutChecked = () => {
-    if (demo || engine.pendingCount() === 0 || confirm("Còn thay đổi chưa đồng bộ trên thiết bị này. Vẫn đăng xuất?")) onLogout();
+    const pending = engine.pendingCount();
+    if (demo || pending === 0 || confirm(
+      `Còn ${pending} thay đổi chưa đồng bộ lên máy chủ. Đăng xuất sẽ xóa bản lưu trên trình duyệt này và MẤT các thay đổi đó. Vẫn đăng xuất?`,
+    )) onLogout();
   };
   const openGuide = () => {
     const n = notes.find((x) => x.title === START_TITLE);

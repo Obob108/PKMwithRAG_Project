@@ -51,12 +51,21 @@ def _get_row(conn, user_id: int, note_id: int):
     return row
 
 
+# So phien ban giu lai cho moi ghi chu. Moi lan luu (sau 800 ms ngung go) la mot phien ban day du, nen khong
+# gioi han thi bang note_versions phinh mai. Thiet bi ngoai tuyen gui len base_version da bi don thi van an toan:
+# update_note giu CA HAI ban trong khoi xung dot (khong mat du lieu), chi mat kha nang tu gop.
+KEEP_VERSIONS = 50
+
+
 def _record(conn, user_id, note_id, version, title, content, type_, device_id) -> None:
     if type_ != "deleted":
         conn.execute(
             "INSERT INTO note_versions(note_id, version, title, content, device_id) VALUES (?, ?, ?, ?, ?)",
             (note_id, version, title, content, device_id),
         )
+        if version > KEEP_VERSIONS:
+            conn.execute("DELETE FROM note_versions WHERE note_id = ? AND version <= ?",
+                         (note_id, version - KEEP_VERSIONS))
     conn.execute(
         "INSERT INTO events(user_id, type, note_id, version, device_id) VALUES (?, ?, ?, ?, ?)",
         (user_id, type_, note_id, version, device_id),
