@@ -1,8 +1,8 @@
 # PostgreSQL 16 + pgvector cho may phat trien (va co the dung tren VPS).
 #   docker compose up -d db        # chay nen; du lieu nam trong volume pgdata, tat may khong mat
 #   docker compose down            # dung (giu du lieu);  docker compose down -v  # dung VA XOA du lieu
-# backend/.env:  DATABASE_URL=postgresql://pkm:pkm@localhost:5433/pkm
-# Kiem thu:     TEST_DATABASE_URL=postgresql://pkm:pkm@localhost:5433/pkm_test   (CSDL rieng, test xoa sach moi lan)
+# backend/.env:  DATABASE_URL=postgresql://pkm:pkm@127.0.0.1:5433/pkm
+# Kiem thu:     TEST_DATABASE_URL=postgresql://pkm:pkm@127.0.0.1:5433/pkm_test   (CSDL rieng, test xoa sach moi lan)
 services:
   db:
     image: pgvector/pgvector:pg16

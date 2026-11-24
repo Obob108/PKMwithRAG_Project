@@ -1,6 +1,6 @@
 """Chep toan bo du lieu tu SQLite (+ vector FAISS) sang PostgreSQL (+ pgvector).
 
-    python scripts/migrate_sqlite_to_pg.py --pg postgresql://pkm:pkm@localhost:5433/pkm
+    python scripts/migrate_sqlite_to_pg.py --pg postgresql://pkm:pkm@127.0.0.1:5433/pkm
     python scripts/migrate_sqlite_to_pg.py --pg ... --sqlite ../data/app.db --faiss-dir ../data/faiss --no-vectors
 
 - Giu nguyen moi id (ghi chu, chunk, su kien...) nen lien ket, phien ban, con tro dong bo cua thiet bi van dung.

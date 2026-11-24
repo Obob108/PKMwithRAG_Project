@@ -75,7 +75,7 @@ class EventHub:
         while not self._stop.is_set():
             conn = None
             try:
-                conn = _driver().connect(self.url, autocommit=True)
+                conn = _driver().connect(self.url, autocommit=True, connect_timeout=10)
                 conn.execute(f"LISTEN {EVENTS_CHANNEL}")
                 self.connected.set()
                 self._wake(None)  # vua (noi lai) xong: cho moi luong SSE kiem tra mot lan

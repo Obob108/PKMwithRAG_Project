@@ -289,7 +289,9 @@ class PgConnection:
 
 
 def connect_pg(url: str, autocommit: bool = False) -> PgConnection:
-    raw = _driver().connect(url, autocommit=autocommit)
+    # connect_timeout: may chu khong tra loi thi bao loi sau 10 giay thay vi treo (vd "localhost" tren Windows thu
+    # IPv6 ::1 truoc trong khi Docker chi mo cong tren 127.0.0.1 -> nen dung 127.0.0.1 trong DATABASE_URL).
+    raw = _driver().connect(url, autocommit=autocommit, connect_timeout=10)
     raw.execute("SET TIME ZONE 'UTC'")
     if not autocommit:
         raw.commit()
