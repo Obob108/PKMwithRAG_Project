@@ -28,7 +28,7 @@ from ..services.llm import LLMBusy
 from ..services.pdf import extract_pdf_markdown
 from ..services.rag import answer_question
 from ..services.retrieval import retrieve
-from .deps import current_user, current_user_brief, get_conn, get_llm, user_lock
+from .deps import current_user, current_user_brief, get_conn, get_llm, pg_user_lock, user_lock
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -100,7 +100,8 @@ def run_index(app, user_id: int, note_id: int) -> None:
     """Lap chi muc o nen, voi ket noi rieng; tuan tu theo tung user."""
     s = app.state.settings
     try:
-        with app.state.db.connection() as conn, user_lock(app, user_id, conn):
+        # Xep hang trong tien trinh TRUOC, roi moi muon ket noi (xem services/locks.py)
+        with user_lock(app, user_id), app.state.db.connection() as conn, pg_user_lock(conn, user_id):
             index_note(conn, app.state.stores, app.state.embedder, note_id,
                        link_top_k=s.link_top_k, link_threshold=s.link_threshold)
     except ValueError:
@@ -394,7 +395,7 @@ def delete_note(note_id: int, request: Request, user: dict = Depends(current_use
         notes_svc.get_note(conn, user["id"], note_id)  # kiem tra quyen so huu truoc khi xoa vector
     except notes_svc.NotFound:
         raise _not_found()
-    with user_lock(request.app, user["id"], conn):
+    with user_lock(request.app, user["id"]), pg_user_lock(conn, user["id"]):
         delete_note_index(conn, request.app.state.stores, note_id, device_id=x_device_id,
                           upload_dir=request.app.state.settings.upload_dir)
     return Response(status_code=204)
@@ -491,7 +492,7 @@ def delete_folder(folder_id: int, user: dict = Depends(current_user), conn=Depen
 def search(request: Request, q: str = Query(..., min_length=1, max_length=500), limit: int = Query(5, ge=1, le=20),
            user: dict = Depends(current_user), conn=Depends(get_conn)):
     st = request.app.state
-    hits = retrieve(conn, st.stores.get(user["id"]), st.embedder, user["id"], q,
+    hits = retrieve(conn, st.stores.get(user["id"], conn=conn), st.embedder, user["id"], q,
                     top_k=limit, context_k=limit, use_graph=False)
     return [{"note_id": h.note_id, "chunk_id": h.chunk_id, "title": h.title, "heading": h.heading,
              "snippet": h.text[:200], "score": round(h.vector_score, 3)} for h in hits]
@@ -504,7 +505,7 @@ def chat(body: ChatRequest, request: Request, user: dict = Depends(current_user)
     llm = get_llm(request)
     use_graph = s.chat_use_graph if body.use_graph is None else body.use_graph
     try:
-        out = answer_question(conn, st.stores.get(user["id"]), st.embedder, llm, user["id"], body.question,
+        out = answer_question(conn, st.stores.get(user["id"], conn=conn), st.embedder, llm, user["id"], body.question,
                               top_k=s.retrieve_top_k, context_k=s.context_top_k, rrf_k=s.rrf_k,
                               use_graph=use_graph, graph_mode="supplement", graph_slots=s.chat_graph_slots)
     except LLMBusy:

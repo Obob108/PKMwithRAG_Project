@@ -48,7 +48,7 @@ def main() -> None:
     if user is None:
         sys.exit(f"Chua co user '{args.user}'.")
     uid = user["id"]
-    store = make_vector_stores(s, Database(s.database)).get(uid)
+    store = make_vector_stores(s, Database(s.database)).get(uid, conn=conn)
     embedder = Embedder(s.embedding_model)
     kw = dict(
         top_k=args.top_k or s.retrieve_top_k,

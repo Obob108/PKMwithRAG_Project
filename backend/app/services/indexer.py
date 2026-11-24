@@ -72,7 +72,7 @@ def index_note(
             if chunks
             else np.zeros((0, 0), dtype="float32")
         )
-        store = stores.get(note["user_id"])
+        store = stores.get(note["user_id"], conn=conn)
         _replace_index(conn, store, note, chunks, vectors, link_top_k, link_threshold)
         conn.execute(
             "UPDATE notes SET status = 'ready', content_hash = ?, error = NULL, "
@@ -206,7 +206,7 @@ def delete_note(conn, stores, note_id: int, *, device_id: str | None = None, upl
     if note is None:
         return
     ids = [r[0] for r in conn.execute("SELECT id FROM chunks WHERE note_id = ?", (note_id,))]
-    store = stores.get(note["user_id"])
+    store = stores.get(note["user_id"], conn=conn)
     store.remove(ids, conn=conn)
     store.save()
     notes_svc.delete_note(conn, note["user_id"], note_id, device_id=device_id, upload_dir=upload_dir)

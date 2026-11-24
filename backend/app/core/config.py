@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # Trong = SQLite (data_dir/app.db) + FAISS. Dat postgresql://user:matkhau@host:5432/ten_csdl de dung PostgreSQL;
     # khi do VECTOR_BACKEND mac dinh la pgvector (vector nam chung bang chunks).
     database_url: str = ""
-    db_pool_size: int = 10
+    db_pool_size: int = 20
     vector_backend: str = ""  # "" = tu chon (pgvector neu PostgreSQL, faiss neu SQLite) | "faiss" | "pgvector"
 
     # Models

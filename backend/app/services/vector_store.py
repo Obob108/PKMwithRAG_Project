@@ -81,7 +81,7 @@ class VectorStores:
         self._stores: dict[int, FaissStore] = {}
         self._lock = threading.Lock()
 
-    def get(self, user_id: int) -> FaissStore:
+    def get(self, user_id: int, conn=None) -> FaissStore:  # conn: cung giao dien voi PgVectorStores
         with self._lock:
             if user_id not in self._stores:
                 path = self.directory / f"user_{user_id}.index"

@@ -59,7 +59,7 @@ class FakeStores:
     def __init__(self):
         self._stores: dict[int, FakeStore] = {}
 
-    def get(self, user_id):
+    def get(self, user_id, conn=None):
         return self._stores.setdefault(user_id, FakeStore())
 
 

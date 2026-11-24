@@ -40,7 +40,7 @@ def main() -> None:
         "SELECT c.id, c.note_id, c.heading, c.text, n.title FROM chunks c "
         "JOIN notes n ON n.id = c.note_id WHERE c.user_id = ? ORDER BY c.id", (user["id"],)
     ).fetchall()
-    store = make_vector_stores(s, Database(s.database)).get(user["id"])
+    store = make_vector_stores(s, Database(s.database)).get(user["id"], conn=conn)
     mat = np.stack([store.get_vector(r["id"]) for r in rows])
     sims = mat @ mat.T
 

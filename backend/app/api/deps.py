@@ -3,7 +3,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 
 from ..core.security import decode_token
-from ..services.locks import user_lock  # noqa: F401  (routes import tu day)
+from ..services.locks import pg_user_lock, user_lock  # noqa: F401  (routes import tu day)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 

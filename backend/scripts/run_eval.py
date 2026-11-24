@@ -54,7 +54,7 @@ def main() -> None:
     weights = [float(w) for w in args.weights.split(",") if w.strip()]
     slots = [int(x) for x in args.slots.split(",") if x.strip()]
     min_edges = [float(x) for x in args.min_edges.split(",") if x.strip()]
-    store = make_vector_stores(s, Database(s.database)).get(user["id"])
+    store = make_vector_stores(s, Database(s.database)).get(user["id"], conn=conn)
     rows = evaluate(conn, store, Embedder(s.embedding_model), user["id"], questions,
                     default_configs(weights, slots, min_edges), top_k=args.top_k, context_k=args.context_k)
 

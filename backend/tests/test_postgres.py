@@ -146,27 +146,53 @@ def test_index_lock_is_shared_across_processes():
     """Hai 'tien trinh' (hai app, hai ket noi): khoa PostgreSQL bat tien trinh thu hai cho, khoa trong RAM thi khong."""
     import threading
     import time
-    from types import SimpleNamespace
 
-    from app.services.locks import user_lock
+    from app.services.locks import pg_user_lock
 
     reset_pg(TEST_PG)
-    app1 = SimpleNamespace(state=SimpleNamespace(locks={}))
-    app2 = SimpleNamespace(state=SimpleNamespace(locks={}))
     c1, c2 = connect(TEST_PG), connect(TEST_PG)
     got = threading.Event()
 
     def second():
-        with user_lock(app2, 5, c2):
+        with pg_user_lock(c2, 5):
             got.set()
 
-    with user_lock(app1, 5, c1):
+    with pg_user_lock(c1, 5):
         t = threading.Thread(target=second)
         t.start()
         time.sleep(0.5)
         assert not got.is_set()  # dang bi chan boi tien trinh 1
     assert got.wait(3)
     t.join(3)
-    with user_lock(app1, 6, c1):  # nguoi dung khac khong bi anh huong
+    with pg_user_lock(c1, 6):  # nguoi dung khac khong bi anh huong
         pass
     c1.close(), c2.close()
+
+
+@pytest.mark.skipif(not _has_pgvector(), reason="can extension pgvector (image pgvector/pgvector)")
+def test_indexing_and_search_use_one_connection_no_pool_deadlock():
+    """Loi gap khi chay that: request giu 1 ket noi roi tim vector lai muon them 1 -> nhieu request dong thoi
+    om het pool va cho nhau. Pool chi 1 ket noi: lap chi muc + tim kiem van phai chay (khong muon them)."""
+    from app.services.indexer import index_note, upsert_note
+    from app.services.pg_vector_store import PgVectorStores
+    from app.services.retrieval import retrieve
+    from tests.fakes import FakeEmbedder
+
+    reset_pg(TEST_PG)
+    db = Database(TEST_PG, pool_size=1)
+    db.pool.timeout = 1.0
+    db.init()
+    stores = PgVectorStores(db, dim=64)
+    stores.ensure_schema()
+    emb = FakeEmbedder(dim=64)
+    with db.connection() as conn:
+        conn.execute("INSERT INTO users(username, password_hash) VALUES ('an', 'x')")
+        conn.commit()
+        a = upsert_note(conn, 1, "A", "vector search embeddings retrieval")
+        b = upsert_note(conn, 1, "B", "embeddings vector search giup retrieval")
+        assert index_note(conn, stores, emb, a, link_threshold=0.3) == "ready"
+        assert index_note(conn, stores, emb, b, link_threshold=0.3) == "ready"
+        assert conn.execute("SELECT COUNT(*) FROM links WHERE type = 'semantic'").fetchone()[0] >= 1
+        hits = retrieve(conn, stores.get(1, conn=conn), emb, 1, "vector search", use_graph=True)
+        assert {h.note_id for h in hits} == {a, b}
+    db.close()
