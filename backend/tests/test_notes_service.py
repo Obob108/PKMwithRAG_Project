@@ -5,11 +5,11 @@ from app.services import notes
 from app.services.indexer import delete_note as delete_note_index
 from app.services.indexer import index_note, upsert_note
 from tests.fakes import FakeEmbedder, FakeStores
+from tests.dbutil import fresh_conn, sqlite_only
 
 
 def _conn():
-    conn = connect(":memory:")
-    init_db(conn)
+    conn = fresh_conn()
     conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x'), ('b','x')")
     conn.commit()
     return conn
@@ -146,6 +146,7 @@ def test_changes_since_cursor_and_limit():
     assert len(notes.changes_since(conn, 1, 0, limit=2)) == 2
 
 
+@sqlite_only
 def test_migration_from_v1_schema_backfills_versions_and_is_idempotent():
     conn = connect(":memory:")
     conn.executescript(SCHEMA)  # schema cu: chua co version/has_conflict/client_id
@@ -327,6 +328,7 @@ def test_delete_folder_moves_notes_out_without_losing_them():
     assert c["folder_id"] is None
 
 
+@sqlite_only
 def test_migration_from_v3_rebuilds_events_and_keeps_ids():
     from app.core import db as dbm
     conn = connect(":memory:")
@@ -446,9 +448,9 @@ def test_decisions_deleted_with_note_and_precision_by_threshold():
     assert conn.execute("SELECT COUNT(*) FROM link_decisions").fetchone()[0] == 0
 
 
+@sqlite_only
 def test_migration_v4_to_v5_adds_link_status():
-    conn = connect(":memory:")
-    init_db(conn)
+    conn = fresh_conn()
     conn.execute("DROP TABLE link_decisions")
     conn.execute("ALTER TABLE links DROP COLUMN status")
     conn.execute("PRAGMA user_version = 4")

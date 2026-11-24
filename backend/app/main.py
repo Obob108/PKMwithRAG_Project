@@ -7,11 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import router
 from .core.config import Settings, get_settings
-from .core.db import connect, init_db
+from .core.db import Database
 from .core.ratelimit import RateLimiter
 from .services.embedding import Embedder
 from .services.mailer import ConsoleMailer, SmtpMailer
-from .services.vector_store import VectorStores
+from .services.event_hub import EventHub
+from .services.vector_store import make_vector_stores
 
 log = logging.getLogger(__name__)
 
@@ -32,20 +33,30 @@ def create_app(settings: Settings | None = None, *, embedder=None, llm=None, sto
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        conn = connect(settings.db_path)
-        init_db(conn)
-        conn.close()
+        db = app.state.db
+        db.init()  # tao / nang cap schema
+        ensure = getattr(app.state.stores, "ensure_schema", None)
+        if ensure:  # pgvector: bat extension + cot embedding
+            ensure()
+        if db.is_postgres:  # dong bo truc tiep bang LISTEN/NOTIFY thay vi hoi CSDL moi giay
+            app.state.event_hub = EventHub(db.target)
+            app.state.event_hub.start()
         settings.upload_dir.mkdir(parents=True, exist_ok=True)
         if settings.jwt_secret == "change-me":
             log.warning("JWT_SECRET dang la gia tri mac dinh; dat mot chuoi ngau nhien dai trong .env")
         if real_embedder:  # nap BGE-m3 san o luong nen de lan lap chi muc dau khong phai cho
             threading.Thread(target=app.state.embedder.encode, args=(["khoi dong"],), daemon=True).start()
         yield
+        if app.state.event_hub is not None:
+            app.state.event_hub.stop()
+        db.close()
 
     app = FastAPI(title="Personal Knowledge App", lifespan=lifespan)
     app.state.settings = settings
     app.state.embedder = embedder or Embedder(settings.embedding_model)
-    app.state.stores = stores or VectorStores(settings.faiss_dir)
+    app.state.db = Database(settings.database, pool_size=settings.db_pool_size)
+    app.state.stores = stores or make_vector_stores(settings, app.state.db)
+    app.state.event_hub = None
     app.state.llm = llm
     app.state.locks = {}
     app.state.login_limiter = RateLimiter(limit=10, window=300)   # chi dem lan dang nhap SAI

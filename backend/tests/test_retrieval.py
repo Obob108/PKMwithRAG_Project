@@ -3,6 +3,7 @@ from app.services.indexer import index_note, upsert_note
 from app.services.rag import NO_CONTEXT_ANSWER, answer_question
 from app.services.retrieval import retrieve
 from tests.fakes import FakeEmbedder, FakeLLM, FakeStores
+from tests.dbutil import fresh_conn, sqlite_only
 
 A = "retrieval augmented generation vector search embeddings"
 B = "vector search embeddings faiss index"      # chung 3 tu voi A, khong chung tu nao voi cau hoi
@@ -11,8 +12,7 @@ QUESTION = "retrieval augmented generation"      # chi giong A
 
 
 def _setup(notes, link_threshold=0.3):
-    conn = connect(":memory:")
-    init_db(conn)
+    conn = fresh_conn()
     conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x'), ('b','x')")
     conn.commit()
     stores, emb = FakeStores(), FakeEmbedder()

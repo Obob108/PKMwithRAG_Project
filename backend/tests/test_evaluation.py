@@ -9,6 +9,7 @@ from app.services.evaluation import (
 )
 from app.services.indexer import index_note, upsert_note
 from tests.fakes import FakeEmbedder, FakeStores
+from tests.dbutil import fresh_conn, sqlite_only
 
 A = "retrieval augmented generation vector search embeddings"
 B = "vector search embeddings faiss index"
@@ -41,8 +42,7 @@ def test_load_questions_and_errors():
 
 
 def _env():
-    conn = connect(":memory:")
-    init_db(conn)
+    conn = fresh_conn()
     conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x')")
     conn.commit()
     stores, emb = FakeStores(), FakeEmbedder()

@@ -10,5 +10,6 @@ pymupdf
 google-genai
 argon2-cffi
 pyjwt
+psycopg[binary]>=3.2
 pytest
 httpx

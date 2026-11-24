@@ -18,7 +18,8 @@ from app.services.evaluation import (  # noqa: E402
     default_configs, evaluate, load_questions, missing_gold, paired_diff, regressions, split_questions,
     summarize,
 )
-from app.services.vector_store import VectorStores  # noqa: E402
+from app.core.db import Database  # noqa: E402
+from app.services.vector_store import make_vector_stores  # noqa: E402
 
 
 def main() -> None:
@@ -39,7 +40,7 @@ def main() -> None:
     args = p.parse_args()
 
     s = get_settings()
-    conn = connect(s.db_path)
+    conn = connect(s.database)
     init_db(conn)
     user = conn.execute("SELECT id FROM users WHERE username = ?", (args.user,)).fetchone()
     if user is None:
@@ -53,7 +54,7 @@ def main() -> None:
     weights = [float(w) for w in args.weights.split(",") if w.strip()]
     slots = [int(x) for x in args.slots.split(",") if x.strip()]
     min_edges = [float(x) for x in args.min_edges.split(",") if x.strip()]
-    store = VectorStores(s.faiss_dir).get(user["id"])
+    store = make_vector_stores(s, Database(s.database)).get(user["id"])
     rows = evaluate(conn, store, Embedder(s.embedding_model), user["id"], questions,
                     default_configs(weights, slots, min_edges), top_k=args.top_k, context_k=args.context_k)
 

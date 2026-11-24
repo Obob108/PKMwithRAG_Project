@@ -76,7 +76,7 @@ def index_note(
         _replace_index(conn, store, note, chunks, vectors, link_top_k, link_threshold)
         conn.execute(
             "UPDATE notes SET status = 'ready', content_hash = ?, error = NULL, "
-            "updated_at = datetime('now') WHERE id = ?",
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (content_hash, note_id),
         )
         conn.commit()
@@ -111,10 +111,10 @@ def _replace_index(conn, store, note, chunks, vectors, link_top_k, link_threshol
     new_ids: list[int] = []
     for chunk in chunks:
         cur = conn.execute(
-            "INSERT INTO chunks(note_id, user_id, idx, heading, text) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO chunks(note_id, user_id, idx, heading, text) VALUES (?, ?, ?, ?, ?) RETURNING id",
             (note_id, user_id, chunk.idx, chunk.heading, chunk.text),
         )
-        new_ids.append(cur.lastrowid)
+        new_ids.append(cur.fetchone()[0])
 
     # 4) Canh semantic.
     dst_ids = {cid for hits in neighbors for cid, _ in hits}
@@ -163,8 +163,9 @@ def _replace_index(conn, store, note, chunks, vectors, link_top_k, link_threshol
     )
 
     # 7) Cap nhat FAISS roi luu, sau do caller commit.
-    store.remove(old_ids)
-    store.add(new_ids, vectors)
+    # conn: kho vector nam trong CSDL (pgvector) ghi trong CUNG transaction voi chunk; FAISS bo qua tham so nay.
+    store.remove(old_ids, conn=conn)
+    store.add(new_ids, vectors, conn=conn)
     store.save()
 
 
@@ -175,6 +176,6 @@ def delete_note(conn, stores, note_id: int, *, device_id: str | None = None, upl
         return
     ids = [r[0] for r in conn.execute("SELECT id FROM chunks WHERE note_id = ?", (note_id,))]
     store = stores.get(note["user_id"])
-    store.remove(ids)
+    store.remove(ids, conn=conn)
     store.save()
     notes_svc.delete_note(conn, note["user_id"], note_id, device_id=device_id, upload_dir=upload_dir)

@@ -1,5 +1,9 @@
 import sqlite3
+import threading
+from contextlib import contextmanager
 from pathlib import Path
+
+from .pg import PgPool, connect_pg, init_pg, is_postgres_url
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -173,7 +177,11 @@ CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, id);
 """
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
+def connect(path: str | Path):
+    """SQLite (duong dan file / ":memory:") hoac PostgreSQL (postgresql://...). Ca hai co cung giao dien
+    execute / executescript / commit / rollback / close, dong ket qua doc duoc theo ten cot va vi tri."""
+    if is_postgres_url(path):
+        return connect_pg(str(path))
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -242,7 +250,41 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def init_db(conn: sqlite3.Connection) -> None:
+def init_db(conn) -> None:
+    if getattr(conn, "is_postgres", False):
+        init_pg(conn)
+        return
     conn.executescript(SCHEMA)
     conn.commit()
     _migrate(conn)
+
+
+class Database:
+    """Diem vao CSDL cua ung dung. PostgreSQL: connection pool (muon/tra ket noi). SQLite: moi lan mot ket noi
+    moi (mo file SQLite rat re, khong can pool)."""
+
+    def __init__(self, target, pool_size: int = 10):
+        self.target = str(target)
+        self.is_postgres = is_postgres_url(self.target)
+        self.pool = PgPool(self.target, max_size=pool_size) if self.is_postgres else None
+        self._init_lock = threading.Lock()
+
+    @contextmanager
+    def connection(self):
+        if self.pool is not None:
+            with self.pool.connection() as conn:
+                yield conn
+            return
+        conn = connect(self.target)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def init(self) -> None:
+        with self._init_lock, self.connection() as conn:
+            init_db(conn)
+
+    def close(self) -> None:
+        if self.pool is not None:
+            self.pool.close()

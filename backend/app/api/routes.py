@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from ..core import captcha
-from ..core.db import connect
 from ..core.security import create_token, hash_password, verify_password
 from ..services import attachments as att_svc
 from ..services import notes as notes_svc
@@ -29,7 +28,7 @@ from ..services.llm import LLMBusy
 from ..services.pdf import extract_pdf_markdown
 from ..services.rag import answer_question
 from ..services.retrieval import retrieve
-from .deps import current_user, get_conn, get_llm, user_lock
+from .deps import current_user, current_user_brief, get_conn, get_llm, user_lock
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -100,17 +99,14 @@ class ChatRequest(BaseModel):
 def run_index(app, user_id: int, note_id: int) -> None:
     """Lap chi muc o nen, voi ket noi rieng; tuan tu theo tung user."""
     s = app.state.settings
-    conn = connect(s.db_path)
     try:
-        with user_lock(app, user_id):
+        with user_lock(app, user_id), app.state.db.connection() as conn:
             index_note(conn, app.state.stores, app.state.embedder, note_id,
                        link_top_k=s.link_top_k, link_threshold=s.link_threshold)
     except ValueError:
         pass  # ghi chu da bi xoa truoc khi kip lap chi muc
     except Exception:  # noqa: BLE001
         log.exception("Lap chi muc nen that bai (ghi chu %s)", note_id)
-    finally:
-        conn.close()
 
 
 def _not_found() -> HTTPException:
@@ -184,11 +180,11 @@ def register(body: RegisterRequest, request: Request, conn=Depends(get_conn)):
         raise HTTPException(status_code=409, detail="Tên đăng nhập đã tồn tại")
     if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
         raise HTTPException(status_code=409, detail="Email đã được dùng cho tài khoản khác")
-    cur = conn.execute("INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?)",
-                       (username, email, hash_password(body.password)))
+    user_id = conn.execute("INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?) RETURNING id",
+                           (username, email, hash_password(body.password))).fetchone()[0]
     conn.commit()
     limiter.hit(key)
-    return _token_for(request, cur.lastrowid)
+    return _token_for(request, user_id)
 
 
 FORGOT_MESSAGE = ("Nếu email này thuộc một tài khoản, mã xác nhận đã được gửi tới hộp thư. "
@@ -531,47 +527,60 @@ def sync_changes(since: int | None = Query(default=None, ge=0), user: dict = Dep
     return {"cursor": events[-1]["id"] if events else since, "events": events}
 
 
-def _latest(db_path, user_id: int) -> int:
-    conn = connect(db_path)
-    try:
+def _latest(db, user_id: int) -> int:
+    with db.connection() as conn:
         return notes_svc.latest_event_id(conn, user_id)
-    finally:
-        conn.close()
 
 
-def _poll(db_path, user_id: int, cursor: int) -> list[dict]:
-    conn = connect(db_path)
-    try:
+def _poll(db, user_id: int, cursor: int) -> list[dict]:
+    with db.connection() as conn:
         return notes_svc.changes_since(conn, user_id, cursor)
-    finally:
-        conn.close()
 
 
 @router.get("/events")
 async def events(request: Request, since: int | None = Query(default=None, ge=0),
                  max_seconds: int | None = Query(default=None, ge=1, le=3600),
-                 user: dict = Depends(current_user)):
+                 user: dict = Depends(current_user_brief)):
     """Server-Sent Events: day su kien thay doi ghi chu. Client dung fetch co header Authorization
-    (EventSource khong gui duoc header), tu noi lai kem `since` = id su kien cuoi da nhan."""
-    s = request.app.state.settings
+    (EventSource khong gui duoc header), tu noi lai kem `since` = id su kien cuoi da nhan.
+
+    PostgreSQL: cho thong bao LISTEN/NOTIFY (EventHub), chi truy van khi co su kien cua nguoi dung nay
+    (hoi lai moi 15 giay de an toan). SQLite: hoi CSDL moi giay nhu truoc. Luong SSE khong giu ket noi CSDL:
+    moi lan truy van muon tu pool roi tra ngay."""
+    st = request.app.state
+    s, db, hub = st.settings, st.db, st.event_hub
     user_id = user["id"]
 
     async def stream():
-        cursor = since if since is not None else await run_in_threadpool(_latest, s.db_path, user_id)
-        deadline = time.monotonic() + (max_seconds or s.sse_max_seconds)
-        idle = 0
-        yield "retry: 3000\n\n"
-        while time.monotonic() < deadline:
-            if await request.is_disconnected():
-                break
-            batch = await run_in_threadpool(_poll, s.db_path, user_id, cursor)
-            for e in batch:
-                cursor = e["id"]
-                yield f"id: {e['id']}\nevent: note\ndata: {json.dumps(e)}\n\n"
-            idle = 0 if batch else idle + 1
-            if idle and idle % 15 == 0:
-                yield ": keepalive\n\n"
-            await asyncio.sleep(1.0)
+        wake = hub.subscribe(user_id) if hub is not None else None
+        try:
+            cursor = since if since is not None else await run_in_threadpool(_latest, db, user_id)
+            deadline = time.monotonic() + (max_seconds or s.sse_max_seconds)
+            last_sent = time.monotonic()
+            yield "retry: 3000\n\n"
+            while time.monotonic() < deadline:
+                if await request.is_disconnected():
+                    break
+                if wake is not None:
+                    wake.clear()  # xoa truoc khi truy van: su kien den trong luc truy van se danh thuc lan sau
+                batch = await run_in_threadpool(_poll, db, user_id, cursor)
+                for e in batch:
+                    cursor = e["id"]
+                    last_sent = time.monotonic()
+                    yield f"id: {e['id']}\nevent: note\ndata: {json.dumps(e)}\n\n"
+                if time.monotonic() - last_sent >= 15:
+                    last_sent = time.monotonic()
+                    yield ": keepalive\n\n"
+                if wake is None:
+                    await asyncio.sleep(1.0)
+                else:
+                    try:
+                        await asyncio.wait_for(wake.wait(), timeout=min(15.0, max(deadline - time.monotonic(), 0.1)))
+                    except asyncio.TimeoutError:
+                        pass
+        finally:
+            if wake is not None:
+                hub.unsubscribe(user_id, wake)
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

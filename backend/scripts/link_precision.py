@@ -27,7 +27,7 @@ def main() -> None:
     args = p.parse_args()
 
     s = get_settings()
-    conn = connect(s.db_path)
+    conn = connect(s.database)
     init_db(conn)
     user = conn.execute("SELECT id FROM users WHERE username = ?", (args.user,)).fetchone()
     if user is None:

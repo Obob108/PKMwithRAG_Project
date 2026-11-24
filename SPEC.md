@@ -12,7 +12,7 @@ Giai đoạn phát triển chạy trên laptop; deploy VPS làm sau. Đây là p
 dữ liệu gửi tới API Gemini không phải vấn đề.
 
 ## 2. Stack
-- Backend: Python 3.11, FastAPI, SQLite (WAL)
+- Backend: Python 3.11, FastAPI. CSDL: PostgreSQL 16 + pgvector (DATABASE_URL, khuyến nghị khi triển khai) hoặc SQLite (WAL) + FAISS (mặc định khi phát triển); cùng mã nguồn, chọn bằng cấu hình
 - Embedding: BAAI/bge-m3 (dense, 1024 chiều, chuẩn hóa L2), chạy CPU
 - Vector index: FAISS IndexFlatIP + IndexIDMap, mỗi user một file (id = chunks.id)
 - Đồ thị: NetworkX (dựng từ bảng links khi cần vẽ/phân tích)
@@ -187,3 +187,19 @@ Ghi chú thiết kế:
 - Bộ ghi chú hiện có: 19 ghi chú ~1 KB + 2 PDF tóm tắt, cùng một chủ đề, 82 chunk. Nhỏ và đồng nhất, nên kết quả chỉ mang tính thử nghiệm; nên bổ sung ghi chú thật thuộc chủ đề khác trước khi chốt số liệu cho báo cáo.
 - Cảnh báo về dữ liệu đánh giá: nếu mọi ghi chú cùng một chủ đề thì hàng xóm đồ thị trùng với hàng xóm vector và đồ thị không có chỗ để chứng minh giá trị. Bộ đánh giá cần câu hỏi "multi" mà ghi chú đích ít trùng từ vựng/ngữ nghĩa trực tiếp với câu hỏi, và nên có thêm ghi chú thuộc chủ đề khác.
 - BGE-m3: hai câu không liên quan vẫn có cosine khoảng 0.37 (đo thực tế), nên τ không được đặt thấp.
+
+## 13. PostgreSQL + pgvector
+- Một bộ câu SQL cho cả hai CSDL: tham số `?`, `CURRENT_TIMESTAMP`, `INSERT ... RETURNING id`, `ON CONFLICT`,
+  `MAX(CASE WHEN ...)` thay cho `MAX(điều kiện)`. Lớp `PgConnection` (core/pg.py) đổi `?` → `%s`, trả dòng đọc được
+  theo tên và vị trí như sqlite3.Row, cột thời gian (timestamptz) trả chuỗi UTC 'YYYY-MM-DD HH:MM:SS' như SQLite.
+- Connection pool (`PgPool`, tối đa DB_POOL_SIZE): request mượn rồi trả, giao dịch dở dang bị rollback khi trả.
+  Luồng SSE chỉ mượn kết nối lúc kiểm tra token và lúc truy vấn, không giữ suốt luồng (tránh cạn pool).
+- Đồng bộ trực tiếp: trigger trên `events` gọi `pg_notify('pkm_events', user_id)` (chỉ gửi khi COMMIT);
+  `EventHub` giữ MỘT kết nối LISTEN cho cả tiến trình, đánh thức đúng luồng SSE của người dùng đó; vẫn tự kiểm tra
+  lại mỗi 15 giây phòng mất thông báo. SQLite vẫn hỏi mỗi giây như cũ.
+- Vector (`PgVectorStore`): cột `chunks.embedding vector(1024)`, ghi cùng transaction với chunk; tìm CHÍNH XÁC
+  bằng toán tử `<#>` (tích vô hướng âm; vector đã chuẩn hóa L2 nên = cosine), không dùng chỉ mục HNSW → kết quả
+  trùng FAISS IndexFlatIP, số liệu đánh giá giữ nguyên. Kho lớn (hàng trăm nghìn chunk) thì thêm chỉ mục HNSW.
+- `scripts/migrate_sqlite_to_pg.py`: chép toàn bộ dữ liệu + vector FAISS, giữ nguyên id, một giao dịch.
+- Kiểm thử: `TEST_DATABASE_URL` chạy cùng bộ test trên PostgreSQL thật (tests/dbutil.py); test nâng cấp schema SQLite
+  cũ chỉ chạy với SQLite; test pgvector cần extension `vector` (docker-compose.yml).

@@ -1,18 +1,18 @@
 import sqlite3
 
 from app.core.db import connect, init_db
+from tests.dbutil import fresh_conn, integrity_errors, sqlite_only
 
 
 def _setup():
-    conn = connect(":memory:")
-    init_db(conn)
+    conn = fresh_conn()
     conn.execute("INSERT INTO users(username, password_hash) VALUES ('a', 'x'), ('b', 'x')")
     return conn
 
 
 def _note(conn, user_id, title):
-    cur = conn.execute("INSERT INTO notes(user_id, title, content) VALUES (?, ?, 'c')", (user_id, title))
-    return cur.lastrowid
+    cur = conn.execute("INSERT INTO notes(user_id, title, content) VALUES (?, ?, 'c') RETURNING id", (user_id, title))
+    return cur.fetchone()[0]
 
 
 def test_unique_title_per_user():
@@ -22,15 +22,15 @@ def test_unique_title_per_user():
     try:
         _note(conn, 1, "RAG")
         raise AssertionError("expected IntegrityError")
-    except sqlite3.IntegrityError:
+    except integrity_errors():
         pass
 
 
 def test_delete_note_cascades_to_chunks_and_links():
     conn = _setup()
     n1, n2 = _note(conn, 1, "A"), _note(conn, 1, "B")
-    c1 = conn.execute("INSERT INTO chunks(note_id, user_id, idx, text) VALUES (?, 1, 0, 't')", (n1,)).lastrowid
-    c2 = conn.execute("INSERT INTO chunks(note_id, user_id, idx, text) VALUES (?, 1, 0, 't')", (n2,)).lastrowid
+    c1 = conn.execute("INSERT INTO chunks(note_id, user_id, idx, text) VALUES (?, 1, 0, 't') RETURNING id", (n1,)).fetchone()[0]
+    c2 = conn.execute("INSERT INTO chunks(note_id, user_id, idx, text) VALUES (?, 1, 0, 't') RETURNING id", (n2,)).fetchone()[0]
     conn.execute(
         "INSERT INTO links(user_id, src_note, dst_note, src_chunk, dst_chunk, type, score) "
         "VALUES (1, ?, ?, ?, ?, 'semantic', 0.8)", (n1, n2, c1, c2))
@@ -52,12 +52,13 @@ def test_unresolved_wikilink_allowed():
 def test_chunk_ids_not_reused():
     conn = _setup()
     n = _note(conn, 1, "A")
-    c1 = conn.execute("INSERT INTO chunks(note_id, user_id, idx, text) VALUES (?, 1, 0, 't')", (n,)).lastrowid
+    c1 = conn.execute("INSERT INTO chunks(note_id, user_id, idx, text) VALUES (?, 1, 0, 't') RETURNING id", (n,)).fetchone()[0]
     conn.execute("DELETE FROM chunks WHERE id = ?", (c1,))
-    c2 = conn.execute("INSERT INTO chunks(note_id, user_id, idx, text) VALUES (?, 1, 0, 't')", (n,)).lastrowid
+    c2 = conn.execute("INSERT INTO chunks(note_id, user_id, idx, text) VALUES (?, 1, 0, 't') RETURNING id", (n,)).fetchone()[0]
     assert c2 > c1
 
 
+@sqlite_only
 def test_migration_from_v2_adds_file_columns():
     import sqlite3 as sq
     from app.core import db as dbm

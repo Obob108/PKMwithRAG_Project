@@ -18,7 +18,8 @@ from app.core.db import connect, init_db  # noqa: E402
 from app.services.embedding import Embedder  # noqa: E402
 from app.services.indexer import index_note, upsert_note  # noqa: E402
 from app.services.pdf import extract_pdf_markdown  # noqa: E402
-from app.services.vector_store import VectorStores  # noqa: E402
+from app.core.db import Database  # noqa: E402
+from app.services.vector_store import make_vector_stores  # noqa: E402
 
 
 def main() -> None:
@@ -28,7 +29,7 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
-    conn = connect(settings.db_path)
+    conn = connect(settings.database)
     init_db(conn)
     user = conn.execute("SELECT id FROM users WHERE username = ?", (args.user,)).fetchone()
     if user is None:
@@ -39,7 +40,7 @@ def main() -> None:
         sys.exit("Khong tim thay file .md hoac .pdf nao.")
 
     embedder = Embedder(settings.embedding_model)
-    stores = VectorStores(settings.faiss_dir)
+    stores = make_vector_stores(settings, Database(settings.database))
 
     for path in files:
         start = time.time()

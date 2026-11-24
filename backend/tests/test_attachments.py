@@ -3,6 +3,7 @@ import pytest
 from app.core.db import connect, init_db
 from app.services import attachments as att
 from app.services.chunking import Chunk, extract_wikilinks
+from tests.dbutil import fresh_conn, sqlite_only
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
@@ -11,8 +12,7 @@ SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
 
 
 def _conn():
-    conn = connect(":memory:")
-    init_db(conn)
+    conn = fresh_conn()
     conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x'), ('b','x')")
     conn.commit()
     return conn

@@ -1,6 +1,7 @@
 from app.core.db import connect, init_db
 from app.services.indexer import delete_note, index_note, upsert_note
 from tests.fakes import FakeEmbedder, FakeStores
+from tests.dbutil import fresh_conn, sqlite_only
 
 RAG_A = "Retrieval augmented generation dung vector search va embeddings cho question answering"
 RAG_B = "Embeddings va vector search giup retrieval augmented generation cho question answering tot hon"
@@ -8,8 +9,7 @@ PHO = "Cach nau pho bo voi hanh tay va que, ham xuong bo nhieu gio"
 
 
 def _setup():
-    conn = connect(":memory:")
-    init_db(conn)
+    conn = fresh_conn()
     conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x'), ('b','x')")
     conn.commit()
     return conn, FakeStores(), FakeEmbedder()

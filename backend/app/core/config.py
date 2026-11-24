@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     data_dir: Path = Path("../data")
+    # Trong = SQLite (data_dir/app.db) + FAISS. Dat postgresql://user:matkhau@host:5432/ten_csdl de dung PostgreSQL;
+    # khi do VECTOR_BACKEND mac dinh la pgvector (vector nam chung bang chunks).
+    database_url: str = ""
+    db_pool_size: int = 10
+    vector_backend: str = ""  # "" = tu chon (pgvector neu PostgreSQL, faiss neu SQLite) | "faiss" | "pgvector"
 
     # Models
     embedding_model: str = "BAAI/bge-m3"
@@ -71,6 +76,19 @@ class Settings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.data_dir / "app.db"
+
+    @property
+    def database(self) -> str:
+        """Dich ket noi thuc te: DATABASE_URL neu co, nguoc lai file SQLite."""
+        return self.database_url or str(self.db_path)
+
+    @property
+    def uses_postgres(self) -> bool:
+        return self.database.startswith(("postgresql://", "postgres://"))
+
+    @property
+    def vectors(self) -> str:
+        return self.vector_backend or ("pgvector" if self.uses_postgres else "faiss")
 
     @property
     def faiss_dir(self) -> Path:

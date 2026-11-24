@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import connect, init_db  # noqa: E402
-from app.services.vector_store import VectorStores  # noqa: E402
+from app.core.db import Database  # noqa: E402
+from app.services.vector_store import make_vector_stores  # noqa: E402
 
 BINS = [(0.45, 0.55), (0.55, 0.65), (0.65, 0.75), (0.75, 0.85), (0.85, 1.01)]
 
@@ -30,7 +31,7 @@ def main() -> None:
     args = p.parse_args()
 
     s = get_settings()
-    conn = connect(s.db_path)
+    conn = connect(s.database)
     init_db(conn)
     user = conn.execute("SELECT id FROM users WHERE username = ?", (args.user,)).fetchone()
     if user is None:
@@ -39,7 +40,7 @@ def main() -> None:
         "SELECT c.id, c.note_id, c.heading, c.text, n.title FROM chunks c "
         "JOIN notes n ON n.id = c.note_id WHERE c.user_id = ? ORDER BY c.id", (user["id"],)
     ).fetchall()
-    store = VectorStores(s.faiss_dir).get(user["id"])
+    store = make_vector_stores(s, Database(s.database)).get(user["id"])
     mat = np.stack([store.get_vector(r["id"]) for r in rows])
     sims = mat @ mat.T
 

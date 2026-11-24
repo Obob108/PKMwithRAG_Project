@@ -2,11 +2,11 @@ from app.core.db import connect, init_db
 from app.services.graph_stats import note_degrees
 from app.services.indexer import index_note, upsert_note
 from tests.fakes import FakeEmbedder, FakeStores
+from tests.dbutil import fresh_conn, sqlite_only
 
 
 def test_note_degrees_counts_edges_in_both_directions():
-    conn = connect(":memory:")
-    init_db(conn)
+    conn = fresh_conn()
     conn.execute("INSERT INTO users(username, password_hash) VALUES ('a','x')")
     conn.commit()
     stores, emb = FakeStores(), FakeEmbedder()

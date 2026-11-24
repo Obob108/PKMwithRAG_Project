@@ -26,14 +26,14 @@ class FaissStore:
     def __len__(self) -> int:
         return self._index.ntotal
 
-    def add(self, ids: list[int], vectors: np.ndarray) -> None:
+    def add(self, ids: list[int], vectors: np.ndarray, conn=None) -> None:  # conn: cung giao dien voi PgVectorStore
         if not ids:
             return
         vectors = np.ascontiguousarray(vectors, dtype="float32")
         with self._lock:
             self._index.add_with_ids(vectors, np.asarray(ids, dtype="int64"))
 
-    def remove(self, ids: list[int]) -> None:
+    def remove(self, ids: list[int], conn=None) -> None:
         if not ids:
             return
         with self._lock:
@@ -59,6 +59,17 @@ class FaissStore:
             tmp = self.path.with_suffix(".tmp")
             self._faiss.write_index(self._index, str(tmp))
             os.replace(tmp, self.path)
+
+
+def make_vector_stores(settings, db):
+    """FAISS (file theo user) hoac pgvector (cot chunks.embedding) tuy VECTOR_BACKEND / loai CSDL."""
+    if settings.vectors == "pgvector":
+        if not db.is_postgres:
+            raise ValueError("VECTOR_BACKEND=pgvector can DATABASE_URL tro toi PostgreSQL")
+        from .pg_vector_store import PgVectorStores
+
+        return PgVectorStores(db)
+    return VectorStores(settings.faiss_dir)
 
 
 class VectorStores:

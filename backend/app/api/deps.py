@@ -3,22 +3,18 @@ import threading
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 
-from ..core.db import connect
 from ..core.security import decode_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
 def get_conn(request: Request):
-    """Mot ket noi SQLite rieng cho moi request."""
-    conn = connect(request.app.state.settings.db_path)
-    try:
+    """Ket noi cho mot request: muon tu connection pool (PostgreSQL) hoac mo moi (SQLite), tra lai khi xong."""
+    with request.app.state.db.connection() as conn:
         yield conn
-    finally:
-        conn.close()
 
 
-def current_user(request: Request, token: str = Depends(oauth2_scheme), conn=Depends(get_conn)) -> dict:
+def _user_from_token(conn, request: Request, token: str) -> dict:
     decoded = decode_token(token, request.app.state.settings.jwt_secret)
     row = conn.execute("SELECT id, username, token_version FROM users WHERE id = ?",
                        (decoded[0],)).fetchone() if decoded else None
@@ -27,6 +23,17 @@ def current_user(request: Request, token: str = Depends(oauth2_scheme), conn=Dep
         raise HTTPException(status_code=401, detail="Chưa đăng nhập hoặc phiên đã hết hạn",
                             headers={"WWW-Authenticate": "Bearer"})
     return {"id": row["id"], "username": row["username"]}
+
+
+def current_user(request: Request, token: str = Depends(oauth2_scheme), conn=Depends(get_conn)) -> dict:
+    return _user_from_token(conn, request, token)
+
+
+def current_user_brief(request: Request, token: str = Depends(oauth2_scheme)) -> dict:
+    """Nhu current_user nhung chi muon ket noi trong luc kiem tra token roi tra ngay. Dung cho luong SSE
+    song hang phut: neu giu ket noi ca luong thi vai chuc thiet bi la can connection pool."""
+    with request.app.state.db.connection() as conn:
+        return _user_from_token(conn, request, token)
 
 
 def user_lock(app, user_id: int) -> threading.Lock:

@@ -28,7 +28,7 @@ def main() -> None:
     if len(password) < 6 or password != getpass.getpass("Nhap lai: "):
         sys.exit("Mat khau qua ngan hoac khong khop.")
 
-    conn = connect(get_settings().db_path)
+    conn = connect(get_settings().database)
     init_db(conn)
     try:
         conn.execute(

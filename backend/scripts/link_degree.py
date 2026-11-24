@@ -14,7 +14,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--user", required=True)
     args = p.parse_args()
-    conn = connect(get_settings().db_path)
+    conn = connect(get_settings().database)
     init_db(conn)
     user = conn.execute("SELECT id FROM users WHERE username = ?", (args.user,)).fetchone()
     if user is None:

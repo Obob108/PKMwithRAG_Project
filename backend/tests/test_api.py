@@ -8,6 +8,7 @@ from app.core.config import Settings
 from app.core.db import connect
 from app.core.security import hash_password
 from app.main import create_app
+from tests.dbutil import test_database
 from tests.fakes import FakeEmbedder, FakeLLM, FakeMailer, FakeStores
 
 A = "retrieval augmented generation vector search embeddings"
@@ -16,11 +17,12 @@ B = "vector search embeddings faiss index"
 
 @pytest.fixture
 def client(tmp_path):
-    settings = Settings(_env_file=None, data_dir=tmp_path, jwt_secret="test-secret", link_threshold=0.3)
+    settings = Settings(_env_file=None, data_dir=tmp_path, database_url=test_database(tmp_path),
+                        jwt_secret="test-secret", link_threshold=0.3)
     app = create_app(settings, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("Trả lời thử [1]."),
                      stores=FakeStores(), mailer=FakeMailer())
     with TestClient(app) as c:
-        conn = connect(settings.db_path)
+        conn = connect(settings.database)
         for name in ("alice", "bob"):
             conn.execute("INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?)",
                          (name, f"{name}@gmail.com", hash_password("pw-" + name)))
@@ -322,7 +324,8 @@ def test_forgot_password_limits_mails_per_email(client):
 
 def test_register_disabled_and_invite_code(tmp_path):
     def make(**kw):
-        s = Settings(_env_file=None, data_dir=tmp_path / str(len(kw)), jwt_secret="t", **kw)
+        s = Settings(_env_file=None, data_dir=tmp_path / str(len(kw)), database_url=test_database(tmp_path),
+                     jwt_secret="t", **kw)
         return TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores()))
 
     with make(allow_registration=False) as c:
@@ -375,7 +378,8 @@ def test_hcaptcha_required_for_login_and_register(tmp_path, monkeypatch):
         return token == "ok-token"
 
     monkeypatch.setattr(captcha, "verify_hcaptcha", fake_verify)
-    s = Settings(_env_file=None, data_dir=tmp_path, jwt_secret="t", hcaptcha_sitekey="site", hcaptcha_secret="sec")
+    s = Settings(_env_file=None, data_dir=tmp_path, database_url=test_database(tmp_path), jwt_secret="t",
+                 hcaptcha_sitekey="site", hcaptcha_secret="sec")
     with TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores())) as c:
         assert c.get("/api/config").json()["hcaptcha_sitekey"] == "site"
         reg = {"username": "eve", "email": "eve@gmail.com", "password": "matkhau-dai"}

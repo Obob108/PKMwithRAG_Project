@@ -93,13 +93,14 @@ def create_note(conn, user_id: int, title: str, content: str = "", *, source: st
     title = unique_title(conn, user_id, title)
     cur = conn.execute(
         "INSERT INTO notes(user_id, title, content, source, client_id, has_conflict, file_path, file_name, "
-        "folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         (user_id, title, content, source, client_id, int(merge.has_conflict_markers(content)),
          file_path, file_name, _valid_folder(conn, user_id, folder_id)),
     )
-    _record(conn, user_id, cur.lastrowid, 1, title, content, "created", device_id)
+    note_id = cur.fetchone()[0]
+    _record(conn, user_id, note_id, 1, title, content, "created", device_id)
     conn.commit()
-    return _public(_get_row(conn, user_id, cur.lastrowid))
+    return _public(_get_row(conn, user_id, note_id))
 
 
 def get_note(conn, user_id: int, note_id: int) -> dict:
@@ -161,9 +162,9 @@ def update_note(conn, user_id: int, note_id: int, *, content: str, base_version:
     conn.execute(
         "UPDATE notes SET title = ?, content = ?, version = ?, folder_id = ?, has_conflict = ?, "
         "status = CASE WHEN ? THEN 'pending' ELSE status END, error = CASE WHEN ? THEN NULL ELSE error END, "
-        "updated_at = CASE WHEN ? THEN datetime('now') ELSE updated_at END WHERE id = ?",
+        "updated_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?",
         (new_title, new_content, version, new_folder, int(merge.has_conflict_markers(new_content)),
-         int(reindex), int(reindex), int(reindex), note_id),
+         bool(reindex), bool(reindex), bool(reindex), note_id),
     )
     _record(conn, user_id, note_id, version, new_title, new_content, "updated", device_id)
     conn.commit()
@@ -229,16 +230,17 @@ def _folder_event(conn, user_id: int, folder_id: int, device_id: str | None) -> 
 
 
 def list_folders(conn, user_id: int) -> list[dict]:
-    rows = conn.execute("SELECT * FROM folders WHERE user_id = ? ORDER BY name COLLATE NOCASE, id", (user_id,))
+    rows = conn.execute("SELECT * FROM folders WHERE user_id = ? ORDER BY lower(name), id", (user_id,))
     return [_folder_public(r) for r in rows]
 
 
 def create_folder(conn, user_id: int, name: str, device_id: str | None = None) -> dict:
     name = _check_folder_name(conn, user_id, name)
-    cur = conn.execute("INSERT INTO folders(user_id, name) VALUES (?, ?)", (user_id, name))
-    _folder_event(conn, user_id, cur.lastrowid, device_id)
+    folder_id = conn.execute("INSERT INTO folders(user_id, name) VALUES (?, ?) RETURNING id",
+                             (user_id, name)).fetchone()[0]
+    _folder_event(conn, user_id, folder_id, device_id)
     conn.commit()
-    return _folder_public(_folder_row(conn, user_id, cur.lastrowid))
+    return _folder_public(_folder_row(conn, user_id, folder_id))
 
 
 def rename_folder(conn, user_id: int, folder_id: int, name: str, device_id: str | None = None) -> dict:
@@ -304,13 +306,15 @@ def related_notes(conn, user_id: int, note_id: int, limit: int = 10, include_rej
     _get_row(conn, user_id, note_id)
     rows = conn.execute(
         """
-        SELECT other, type, MAX(score) AS score, MAX(status = 'accepted') AS acc, MAX(status = 'rejected') AS rej
+        SELECT other, type, MAX(score) AS score,
+               MAX(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) AS acc,
+               MAX(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rej
         FROM (
-            SELECT CASE WHEN src_note = :n THEN dst_note ELSE src_note END AS other, type, score, status
-            FROM links WHERE user_id = :u AND (src_note = :n OR dst_note = :n)
-        ) WHERE other IS NOT NULL AND other != :n GROUP BY other, type
+            SELECT CASE WHEN src_note = ? THEN dst_note ELSE src_note END AS other, type, score, status
+            FROM links WHERE user_id = ? AND (src_note = ? OR dst_note = ?)
+        ) AS l WHERE other IS NOT NULL AND other != ? GROUP BY other, type
         """,
-        {"n": note_id, "u": user_id},
+        (note_id, user_id, note_id, note_id, note_id),
     ).fetchall()
     agg: dict[int, dict] = {}
     for r in rows:
@@ -359,7 +363,7 @@ def set_link_status(conn, user_id: int, note_id: int, other_id: int, status: str
         conn.execute(
             "INSERT INTO link_decisions(user_id, note_a, note_b, status, score) VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(user_id, note_a, note_b) DO UPDATE SET "
-            "status = excluded.status, score = excluded.score, decided_at = datetime('now')",
+            "status = excluded.status, score = excluded.score, decided_at = CURRENT_TIMESTAMP",
             (user_id, a, b, status, score),
         )
     conn.execute(f"UPDATE links SET status = ? WHERE {pair}", (status, *args))
@@ -443,7 +447,7 @@ def graph(conn, user_id: int, min_score: float = 0.0) -> dict:
     Canh semantic da bi bo qua khong bao gio hien; canh da chap nhan luon hien (khong phu thuoc min_score).
     """
     rows = conn.execute(
-        "SELECT src_note, dst_note, type, MAX(score) AS score, MAX(status = 'accepted') AS acc FROM links "
+        "SELECT src_note, dst_note, type, MAX(score) AS score, MAX(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) AS acc FROM links "
         "WHERE user_id = ? AND dst_note IS NOT NULL AND src_note != dst_note AND status != 'rejected' "
         "AND (type = 'wiki' OR score >= ? OR status = 'accepted') GROUP BY src_note, dst_note, type",
         (user_id, min_score),

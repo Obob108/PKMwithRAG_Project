@@ -35,11 +35,11 @@ class FakeStore:
     def __len__(self):
         return len(self.vectors)
 
-    def add(self, ids, vectors):
+    def add(self, ids, vectors, conn=None):
         for i, v in zip(ids, vectors):
             self.vectors[int(i)] = np.asarray(v, dtype="float32")
 
-    def remove(self, ids):
+    def remove(self, ids, conn=None):
         for i in ids:
             self.vectors.pop(int(i), None)
 

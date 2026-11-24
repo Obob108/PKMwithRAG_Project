@@ -18,7 +18,8 @@ from app.services.embedding import Embedder  # noqa: E402
 from app.services.llm import GeminiClient  # noqa: E402
 from app.services.rag import answer_question  # noqa: E402
 from app.services.retrieval import retrieve  # noqa: E402
-from app.services.vector_store import VectorStores  # noqa: E402
+from app.core.db import Database  # noqa: E402
+from app.services.vector_store import make_vector_stores  # noqa: E402
 
 
 def print_hits(title, hits):
@@ -41,13 +42,13 @@ def main() -> None:
     args = p.parse_args()
 
     s = get_settings()
-    conn = connect(s.db_path)
+    conn = connect(s.database)
     init_db(conn)
     user = conn.execute("SELECT id FROM users WHERE username = ?", (args.user,)).fetchone()
     if user is None:
         sys.exit(f"Chua co user '{args.user}'.")
     uid = user["id"]
-    store = VectorStores(s.faiss_dir).get(uid)
+    store = make_vector_stores(s, Database(s.database)).get(uid)
     embedder = Embedder(s.embedding_model)
     kw = dict(
         top_k=args.top_k or s.retrieve_top_k,

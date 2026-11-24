@@ -3,14 +3,14 @@ import pytest
 
 from app.core.db import connect, init_db
 from app.services import password_reset as svc
+from tests.dbutil import fresh_conn, schema_version
 
 SECRET = "test-secret"
 
 
 @pytest.fixture
 def conn():
-    c = connect(":memory:")
-    init_db(c)
+    c = fresh_conn()
     c.execute("INSERT INTO users(username, email, password_hash) VALUES ('alice', 'alice@gmail.com', 'x')")
     c.commit()
     yield c
@@ -27,7 +27,7 @@ class Clock:
 
 def test_schema_has_token_version_and_reset_table(conn):
     assert conn.execute("SELECT token_version FROM users WHERE id = 1").fetchone()[0] == 0
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert schema_version(conn) == 8
 
 
 def test_code_is_six_digits_and_only_hash_is_stored(conn):
