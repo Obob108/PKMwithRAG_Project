@@ -1,8 +1,8 @@
 # PostgreSQL 16 + pgvector cho may phat trien (va co the dung tren VPS).
 #   docker compose up -d db        # chay nen; du lieu nam trong volume pgdata, tat may khong mat
 #   docker compose down            # dung (giu du lieu);  docker compose down -v  # dung VA XOA du lieu
-# backend/.env:  DATABASE_URL=postgresql://pkm:pkm@localhost:5432/pkm
-# Kiem thu:     TEST_DATABASE_URL=postgresql://pkm:pkm@localhost:5432/pkm_test   (CSDL rieng, test xoa sach moi lan)
+# backend/.env:  DATABASE_URL=postgresql://pkm:pkm@localhost:5433/pkm
+# Kiem thu:     TEST_DATABASE_URL=postgresql://pkm:pkm@localhost:5433/pkm_test   (CSDL rieng, test xoa sach moi lan)
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -12,7 +12,7 @@ services:
       POSTGRES_PASSWORD: pkm          # DOI mat khau khi chay tren VPS va khong mo cong 5432 ra Internet
       POSTGRES_DB: pkm
     ports:
-      - "127.0.0.1:5432:5432"         # chi nghe tren may nay
+      - "127.0.0.1:5433:5432"         # cong 5433 tren may: tranh dung PostgreSQL cai san (5432)
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./backend/scripts/pg-init:/docker-entrypoint-initdb.d:ro

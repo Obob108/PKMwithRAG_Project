@@ -103,10 +103,13 @@ def test_event_hub_wakes_only_on_commit_and_only_the_right_user():
 def _has_pgvector() -> bool:
     if not TEST_PG:
         return False
-    conn = connect(TEST_PG)
-    ok = conn.execute("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'").fetchone() is not None
-    conn.close()
-    return ok
+    try:  # khong ket noi duoc: de cac test khac bao loi ro rang, khong lam hong ca luot thu thap test
+        conn = connect(TEST_PG)
+        ok = conn.execute("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'").fetchone() is not None
+        conn.close()
+        return ok
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @pytest.mark.skipif(not _has_pgvector(), reason="can extension pgvector (image pgvector/pgvector)")

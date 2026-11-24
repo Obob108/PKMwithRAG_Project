@@ -1,7 +1,7 @@
 """CSDL cho kiem thu: SQLite trong bo nho (mac dinh) hoac PostgreSQL that neu dat TEST_DATABASE_URL.
 
 Chay bo test tren PostgreSQL (vd Docker: docker compose up -d db):
-    $env:TEST_DATABASE_URL = "postgresql://pkm:pkm@localhost:5432/pkm_test"   (PowerShell)
+    $env:TEST_DATABASE_URL = "postgresql://pkm:pkm@localhost:5433/pkm_test"   (PowerShell)
     python -m pytest
 Moi test nhan mot schema sach (xoa va tao lai schema public), nen KHONG tro bien nay vao CSDL that.
 """
@@ -37,7 +37,7 @@ def fresh_conn():
     return conn
 
 
-def test_database(tmp_path) -> str:  # noqa: PT004 (khong phai test)
+def database_url_for(tmp_path) -> str:
     """Gia tri DATABASE_URL cho Settings trong test API (PostgreSQL da xoa sach, hoac file SQLite tam)."""
     if TEST_PG:
         reset_pg(TEST_PG)

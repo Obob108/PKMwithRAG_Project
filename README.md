@@ -80,16 +80,16 @@ docker compose up -d db                     # ở thư mục gốc; lần đầu
 cd backend
 pip install -r requirements.txt             # thêm psycopg
 ```
-Thêm vào `backend/.env`: `DATABASE_URL=postgresql://pkm:pkm@localhost:5432/pkm` rồi khởi động lại uvicorn
+Thêm vào `backend/.env`: `DATABASE_URL=postgresql://pkm:pkm@localhost:5433/pkm` rồi khởi động lại uvicorn
 (schema, extension `vector` và cột `chunks.embedding` tự tạo khi khởi động).
 
 Chép dữ liệu đang có trong SQLite + FAISS sang (giữ nguyên id; chạy một lần, CSDL đích phải rỗng):
 ```
-python scripts/migrate_sqlite_to_pg.py --pg postgresql://pkm:pkm@localhost:5432/pkm
+python scripts/migrate_sqlite_to_pg.py --pg postgresql://pkm:pkm@localhost:5433/pkm
 ```
 Chạy bộ test trên PostgreSQL (CSDL `pkm_test` riêng, bị xóa sạch mỗi test):
 ```
-$env:TEST_DATABASE_URL = "postgresql://pkm:pkm@localhost:5432/pkm_test"
+$env:TEST_DATABASE_URL = "postgresql://pkm:pkm@localhost:5433/pkm_test"
 python -m pytest
 Remove-Item Env:TEST_DATABASE_URL           # quay về chạy test trên SQLite
 ```

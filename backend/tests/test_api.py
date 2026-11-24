@@ -8,7 +8,7 @@ from app.core.config import Settings
 from app.core.db import connect
 from app.core.security import hash_password
 from app.main import create_app
-from tests.dbutil import test_database
+from tests.dbutil import database_url_for
 from tests.fakes import FakeEmbedder, FakeLLM, FakeMailer, FakeStores
 
 A = "retrieval augmented generation vector search embeddings"
@@ -17,7 +17,7 @@ B = "vector search embeddings faiss index"
 
 @pytest.fixture
 def client(tmp_path):
-    settings = Settings(_env_file=None, data_dir=tmp_path, database_url=test_database(tmp_path),
+    settings = Settings(_env_file=None, data_dir=tmp_path, database_url=database_url_for(tmp_path),
                         jwt_secret="test-secret", link_threshold=0.3)
     app = create_app(settings, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("Trả lời thử [1]."),
                      stores=FakeStores(), mailer=FakeMailer())
@@ -324,7 +324,7 @@ def test_forgot_password_limits_mails_per_email(client):
 
 def test_register_disabled_and_invite_code(tmp_path):
     def make(**kw):
-        s = Settings(_env_file=None, data_dir=tmp_path / str(len(kw)), database_url=test_database(tmp_path),
+        s = Settings(_env_file=None, data_dir=tmp_path / str(len(kw)), database_url=database_url_for(tmp_path),
                      jwt_secret="t", **kw)
         return TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores()))
 
@@ -378,7 +378,7 @@ def test_hcaptcha_required_for_login_and_register(tmp_path, monkeypatch):
         return token == "ok-token"
 
     monkeypatch.setattr(captcha, "verify_hcaptcha", fake_verify)
-    s = Settings(_env_file=None, data_dir=tmp_path, database_url=test_database(tmp_path), jwt_secret="t",
+    s = Settings(_env_file=None, data_dir=tmp_path, database_url=database_url_for(tmp_path), jwt_secret="t",
                  hcaptcha_sitekey="site", hcaptcha_secret="sec")
     with TestClient(create_app(s, embedder=FakeEmbedder(dim=1024), llm=FakeLLM("x"), stores=FakeStores())) as c:
         assert c.get("/api/config").json()["hcaptcha_sitekey"] == "site"
