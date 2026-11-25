@@ -31,6 +31,22 @@ python scripts/import_folder.py --user alice --dir "C:\duong\dan\thu_muc_ghi_chu
 ```
 Tiêu đề ghi chú = tên file (không có đuôi), khớp với [[wiki-link]] kiểu Obsidian.
 
+## Tài khoản quản trị (admin)
+
+Admin đăng nhập ở **cùng màn hình đăng nhập**; nếu tài khoản có `role = admin` thì vào thẳng trang quản trị
+(danh sách tài khoản, khóa / mở khóa, ghi chú lập chỉ mục lỗi: chỉ tiêu đề + lỗi, không xem được nội dung).
+Không có API tự cấp quyền admin, chỉ cấp được từ máy chủ:
+
+```powershell
+python scripts/create_user.py root --email root@gmail.com --admin   # tạo admin mới
+python scripts/make_admin.py alice                                   # nâng tài khoản có sẵn
+python scripts/make_admin.py alice --revoke                          # thu quyền
+```
+
+API: `GET /api/admin/users`, `POST /api/admin/users/{id}/lock` | `/unlock`, `GET /api/admin/failed-notes`.
+Người dùng thường gọi `/api/admin/*` nhận **403**, chưa đăng nhập nhận **401**. Tài khoản bị khóa: token
+đang dùng hết hiệu lực ngay, đăng nhập lại nhận 403 "Tài khoản đã bị khóa".
+
 ## Hỏi đáp và chọn ngưỡng τ
 ```
 python scripts/ask.py --user alice "RAG khác gì với semantic linking?"

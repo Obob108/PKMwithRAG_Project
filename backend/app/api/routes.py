@@ -149,13 +149,16 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(),
     if limiter.blocked(key):
         raise HTTPException(status_code=429, detail="Đăng nhập sai quá nhiều lần, thử lại sau vài phút")
     _check_captcha(request, captcha_token)
-    row = conn.execute("SELECT id, password_hash, token_version FROM users WHERE username = ?",
+    row = conn.execute("SELECT id, password_hash, token_version, role, is_active FROM users WHERE username = ?",
                        (form.username,)).fetchone()
     if row is None or not verify_password(row["password_hash"], form.password):
         limiter.hit(key)
         raise HTTPException(status_code=401, detail="Sai tên đăng nhập hoặc mật khẩu")
     limiter.reset(key)
-    return _token_for(request, row["id"], row["token_version"])
+    # Chi bao "bi khoa" SAU khi mat khau dung, de nguoi doan mat khau khong biet tai khoan nao dang bi khoa.
+    if not row["is_active"]:
+        raise HTTPException(status_code=403, detail="Tài khoản đã bị khóa. Liên hệ quản trị viên.")
+    return {**_token_for(request, row["id"], row["token_version"]), "role": row["role"]}
 
 
 @router.post("/auth/register", status_code=201)

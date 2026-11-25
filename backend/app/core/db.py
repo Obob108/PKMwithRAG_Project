@@ -74,7 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(user_id, session_id)
 """
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # v6: anh dinh kem (dan/keo tha vao ghi chu, nhung bang ![[ten]]). Ten duy nhat theo user; file luu
 # o uploads/<user_id>/att/<uuid>.<duoi>, ten file tren dia do he thong dat (khong dung ten tu client).
@@ -246,6 +246,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "token_version" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
     conn.executescript(MIGRATION_V8_PASSWORD_RESETS)
+    # v9: quan tri. role = 'user' | 'admin'; is_active = 0 -> tai khoan bi khoa (khong dang nhap, token cu bi tu choi).
+    if "role" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))")
+    if "is_active" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 

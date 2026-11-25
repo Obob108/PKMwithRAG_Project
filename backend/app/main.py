@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api.admin import router as admin_router
 from .api.routes import router
 from .core.config import Settings, check_production, config_problems, get_settings
 from .core.db import Database
@@ -69,6 +70,7 @@ def create_app(settings: Settings | None = None, *, embedder=None, llm=None, sto
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
     app.include_router(router)
+    app.include_router(admin_router)
 
     @app.get("/health")
     def health() -> dict:

@@ -27,7 +27,7 @@ class Clock:
 
 def test_schema_has_token_version_and_reset_table(conn):
     assert conn.execute("SELECT token_version FROM users WHERE id = 1").fetchone()[0] == 0
-    assert schema_version(conn) == 8
+    assert schema_version(conn) >= 8
 
 
 def test_code_is_six_digits_and_only_hash_is_stored(conn):

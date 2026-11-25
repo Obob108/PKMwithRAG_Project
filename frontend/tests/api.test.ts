@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { forgotPassword, HttpApi, isGmail, login, parseSseBlock, register, resetPassword } from "../src/lib/api.ts";
+import { adminApi, forgotPassword, HttpApi, isGmail, login, parseSseBlock, register, resetPassword } from "../src/lib/api.ts";
 import { ApiError, NetworkError } from "../src/lib/types.ts";
 import type { RemoteEvent } from "../src/lib/types.ts";
 
@@ -50,7 +50,7 @@ test("network failures become NetworkError; 404 on getNote is null; delete 404 i
 test("login and register build a session via /api/me", async () => {
   const calls = stub((url) => url.endsWith("/api/me") ? json({ id: 9, username: "alice" }) : json({ access_token: "T", token_type: "bearer" }));
   const s = await login("", "alice", "pw");
-  assert.deepEqual(s, { token: "T", username: "alice", userId: 9 });
+  assert.deepEqual(s, { token: "T", username: "alice", userId: 9, role: "user" });
   assert.equal(calls[0].init.body, "username=alice&password=pw");
   const r = await register("", "bob", "bob@gmail.com", "matkhau-dai", "ma");
   assert.equal(r.token, "T");
@@ -98,4 +98,21 @@ test("streamEvents delivers events split across chunks and ends when the stream 
   const got: number[] = [];
   await api().streamEvents(0, (e) => { got.push(e.id); }, new AbortController().signal);
   assert.deepEqual(got, [1, 2]);
+});
+
+test("admin role from /api/me and admin calls hit /api/admin/* with the token", async () => {
+  stub((url) => url.endsWith("/api/me") ? json({ id: 1, username: "root", role: "admin" }) : json({ access_token: "T" }));
+  assert.equal((await login("", "root", "pw")).role, "admin");
+
+  const calls = stub((url) => url.endsWith("/lock") ? json({ id: 2, username: "a", is_active: false }) : json([]));
+  assert.deepEqual(await adminApi.users("", "T"), []);
+  const r = await adminApi.setActive("", "T", 2, false);
+  assert.equal(r.is_active, false);
+  assert.equal(calls[0].url, "/api/admin/users");
+  assert.equal(calls[1].url, "/api/admin/users/2/lock");
+  assert.equal(calls[1].init.method, "POST");
+  assert.equal((calls[1].init.headers as Record<string, string>).Authorization, "Bearer T");
+
+  stub(() => json({ detail: "Chỉ quản trị viên mới dùng được chức năng này" }, 403));
+  await assert.rejects(() => adminApi.failedNotes("", "T"), (e: unknown) => e instanceof ApiError && e.status === 403);
 });

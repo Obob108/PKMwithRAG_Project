@@ -1,4 +1,4 @@
-"""Tao tai khoan: python scripts/create_user.py <username> [--email ten@gmail.com]   (chay tu thu muc backend)"""
+"""Tao tai khoan: python scripts/create_user.py <username> [--email ten@gmail.com] [--admin]   (chay tu thu muc backend)"""
 import argparse
 import getpass
 import sys
@@ -17,6 +17,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("username")
     parser.add_argument("--email", help="Gmail cua tai khoan (dung cho quen mat khau)")
+    parser.add_argument("--admin", action="store_true", help="tao tai khoan quan tri")
     args = parser.parse_args()
     email = None
     if args.email:
@@ -32,13 +33,13 @@ def main() -> None:
     init_db(conn)
     try:
         conn.execute(
-            "INSERT INTO users(username, email, password_hash) VALUES (?, ?, ?)",
-            (args.username, email, PasswordHasher().hash(password)),
+            "INSERT INTO users(username, email, password_hash, role) VALUES (?, ?, ?, ?)",
+            (args.username, email, PasswordHasher().hash(password), "admin" if args.admin else "user"),
         )
         conn.commit()
     except Exception as exc:  # noqa: BLE001
         sys.exit(f"Khong tao duoc user: {exc}")
-    print(f"Da tao user '{args.username}'.")
+    print(f"Da tao {'admin' if args.admin else 'user'} '{args.username}'.")
 
 
 if __name__ == "__main__":

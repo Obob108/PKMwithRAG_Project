@@ -7,6 +7,8 @@ export interface Session {
   token: string;
   username: string;
   userId: number;
+  /** "admin" → sau khi đăng nhập vào trang quản trị. Phiên cũ lưu trước khi có trường này coi như "user". */
+  role?: "user" | "admin";
 }
 export interface PublicConfig {
   allow_registration: boolean;
@@ -98,8 +100,8 @@ export async function getConfig(base = ""): Promise<PublicConfig> {
 async function sessionFromToken(base: string, token: string): Promise<Session> {
   const res = await doFetch(`${base}/api/me`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw await readError(res);
-  const me = (await res.json()) as { id: number; username: string };
-  return { token, username: me.username, userId: me.id };
+  const me = (await res.json()) as { id: number; username: string; role?: "user" | "admin" };
+  return { token, username: me.username, userId: me.id, role: me.role === "admin" ? "admin" : "user" };
 }
 
 export async function login(base: string, username: string, password: string, captchaToken?: string): Promise<Session> {
@@ -155,6 +157,42 @@ export function isGmail(raw: string): boolean {
   const e = raw.trim().toLowerCase();
   return /^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?@gmail\.com$/.test(e) && !e.includes("..");
 }
+
+// ---------------------------------------------------------------- quản trị (chỉ tài khoản admin)
+export interface AdminUser {
+  id: number;
+  username: string;
+  email: string | null;
+  role: "user" | "admin";
+  is_active: boolean;
+  created_at: string;
+  note_count: number;
+  failed_count: number;
+}
+/** Ghi chú lập chỉ mục lỗi: máy chủ chỉ trả tiêu đề + thông báo lỗi, không trả nội dung. */
+export interface FailedNote {
+  id: number;
+  title: string;
+  error: string;
+  source: string;
+  updated_at: string;
+  user_id: number;
+  username: string;
+}
+
+async function adminCall<T>(base: string, token: string, method: string, path: string): Promise<T> {
+  const res = await doFetch(`${base}/api/admin${path}`, { method, headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as T;
+}
+
+export const adminApi = {
+  users: (base: string, token: string) => adminCall<AdminUser[]>(base, token, "GET", "/users"),
+  failedNotes: (base: string, token: string) => adminCall<FailedNote[]>(base, token, "GET", "/failed-notes"),
+  setActive: (base: string, token: string, userId: number, active: boolean) =>
+    adminCall<{ id: number; username: string; is_active: boolean }>(
+      base, token, "POST", `/users/${userId}/${active ? "unlock" : "lock"}`),
+};
 
 // ---------------------------------------------------------------- SSE
 export function parseSseBlock(block: string): { event: string; data: string } | null {

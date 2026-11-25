@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Icon } from "./components/Icons.tsx";
 import type { PointerEvent as RPointerEvent, ReactNode } from "react";
+import AdminPage from "./components/AdminPage.tsx";
 import AuthScreen from "./components/AuthScreen.tsx";
 import { StatusBar, TabBar, Toolbar, UserMenu } from "./components/Chrome.tsx";
 import Home from "./components/Home.tsx";
@@ -87,6 +88,8 @@ export default function App() {
     setAuth("login");
     if (reason === "user" && uid != null) void deleteIdbStore(`pkm-${uid}`);
   }, [session]);
+  // Tài khoản admin đăng nhập ở cùng màn hình nhưng vào thẳng trang quản trị (máy chủ vẫn tự kiểm tra quyền).
+  if (session?.role === "admin") return <AdminPage key={session.userId} session={session} onLogout={logout} />;
   if (session) return <Boot key={session.userId} session={session} onLogout={logout} />;
   if (auth) return <AuthScreen key={auth} initialMode={auth} onLogin={login} onDemo={() => setAuth(null)} />;
   return <DemoBoot onAuth={setAuth} />;
