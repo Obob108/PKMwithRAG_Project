@@ -15,6 +15,21 @@ IMAGE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp)$", re.IGNORECASE)
 IMAGE_EMBED_RE = re.compile(r"!\[\[[^\[\]\n]+?\.(?:png|jpe?g|gif|webp)(?:\|\d+)?\]\]", re.IGNORECASE)
 SENTENCE_RE = re.compile(r"(?<=[.!?。])\s+")
 PARAGRAPH_RE = re.compile(r"\n\s*\n")
+# Frontmatter YAML o dau file (kieu Obsidian): --- ... --- . Moi ghi chu co cung cau truc "title/topic/tags" nen
+# neu dua vao embedding thi doan dau cua hai ghi chu khong lien quan van giong nhau -> sinh lien ket ngu nghia gia.
+FRONTMATTER_RE = re.compile(r"\A\ufeff?---[ \t]*\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+FM_TITLE_RE = re.compile(r"^title\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def strip_frontmatter(text: str) -> str:
+    """Bo khoi frontmatter YAML o dau; giu lai gia tri `title:` (co nghia) lam dong dau tien."""
+    m = FRONTMATTER_RE.match(text)
+    if not m:
+        return text
+    rest = text[m.end():]
+    t = FM_TITLE_RE.search(m.group(1))
+    title = t.group(1).strip().strip("\"'") if t else ""
+    return f"{title}\n\n{rest}" if title else rest
 
 
 @dataclass(frozen=True)
@@ -97,7 +112,7 @@ def _split_long(paragraph: str, max_chars: int) -> list[str]:
 
 def chunk_markdown(text: str, max_chars: int = 1500, overlap_chars: int = 200) -> list[Chunk]:
     chunks: list[Chunk] = []
-    for heading, body in _split_sections(text):
+    for heading, body in _split_sections(strip_frontmatter(text)):
         pieces: list[str] = []
         for para in PARAGRAPH_RE.split(body):
             para = para.strip()

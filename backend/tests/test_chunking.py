@@ -53,3 +53,15 @@ def test_embed_text_includes_heading():
 def test_wikilinks():
     text = "Xem [[RAG]] va [[Embedding|nhung vector]], [[RAG]] lai, [[Note#muc]] va [[ ]]."
     assert extract_wikilinks(text) == ["RAG", "Embedding", "Note"]
+
+
+def test_frontmatter_is_not_embedded_but_title_is_kept():
+    from app.services.chunking import chunk_markdown, strip_frontmatter
+
+    md = "---\ntitle: Học dựa trên dự án\ntopic: New Ways to Learn\ntags: [pbl, dewey]\n---\n\n# PBL\nNội dung chính."
+    text = "\n".join(c.text for c in chunk_markdown(md))
+    assert "topic:" not in text and "tags:" not in text and "---" not in text
+    assert "Học dựa trên dự án" in text and "Nội dung chính." in text
+    # khong co frontmatter, hoac '---' giua bai (duong ke ngang): giu nguyen
+    assert strip_frontmatter("# A\n\n---\n\nB") == "# A\n\n---\n\nB"
+    assert strip_frontmatter("﻿---\ntags: [x]\n---\nBody") == "Body"

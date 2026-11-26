@@ -4,7 +4,7 @@ import type { KeyboardEvent } from "react";
 import type { HttpApi } from "../lib/api.ts";
 import {
   boundsOf, buildView, createSim, DENSITY_HINT, DENSITY_LABEL, densityCutoffs, folderColors, folderKey, hitTest,
-  highlightSet, isSettled, matchNodes, NO_FOLDER_COLOR, stepSim,
+  highlightSet, isSettled, matchNodes, NO_FOLDER_COLOR, placeLabels, stepSim,
 } from "../lib/graphModel.ts";
 import type { Density, GEdge, GNode, GraphData, SearchMode, Sim, SimNode } from "../lib/graphModel.ts";
 import { extractTags } from "../lib/text.ts";
@@ -51,6 +51,7 @@ const MODE_LABEL: Record<SearchMode, string> = { title: "Tiêu đề", content: 
 /** Đoạn xem trước: bỏ bớt ký hiệu markdown cho dễ đọc. */
 function preview(md: string, max = 260): string {
   const t = md
+    .replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, "") // frontmatter YAML
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
@@ -393,6 +394,7 @@ export default function GraphView(p: Props) {
       c.fillRect(0, 0, w, h);
       const alphaOf = (id: number) => alphas.current.get(id) ?? 1;
 
+      const info = new Map(v.nodes.map((n) => [n.id, n]));
       // Cạnh: [[liên kết]] = nét liền, đậm; ngữ nghĩa = nét đứt, độ đậm theo độ tương đồng.
       for (const e of v.edges) {
         const a = sim.nodes[sim.index.get(e.source) ?? -1];
@@ -401,7 +403,9 @@ export default function GraphView(p: Props) {
         const touches = focus !== null && (e.source === focus || e.target === focus);
         const sem = clamp(e.semantic_score ?? 0.5, 0, 1);
         const strong = e.wiki || !!e.accepted; // do người dùng viết [[…]] hoặc đã ✓ gợi ý
-        const base = touches ? 1 : strong ? 0.75 : 0.3 + 0.45 * sem;
+        // gợi ý AI nối hai thư mục khác nhau: mờ hơn khi không chọn nút nào, để các cụm dễ đọc
+        const cross = folderKey(info.get(e.source)?.folder_id) !== folderKey(info.get(e.target)?.folder_id);
+        const base = touches ? 1 : strong ? 0.75 : (0.3 + 0.45 * sem) * (cross ? 0.45 : 1);
         c.globalAlpha = Math.min(alphaOf(e.source), alphaOf(e.target)) * base;
         c.strokeStyle = touches || strong ? col.accent : col.edge;
         c.lineWidth = (touches ? 2 : strong ? 1.6 : 1) * clamp(k, 0.6, 1.4);
@@ -414,7 +418,7 @@ export default function GraphView(p: Props) {
       c.setLineDash([]);
 
       // Nút: màu = thư mục; hình tròn = ghi chú, hình vuông bo góc = PDF.
-      const info = new Map(v.nodes.map((n) => [n.id, n]));
+      const labelQ: { text: string; x: number; y: number; al: number; bold: boolean; pri: number }[] = [];
       for (const n of sim.nodes) {
         const meta = info.get(n.id);
         if (!meta) continue;
@@ -442,13 +446,31 @@ export default function GraphView(p: Props) {
         }
         const showLabel = (showLabels && (k > 0.9 || (hl?.has(n.id) ?? false) || meta.degree >= 4)) || n.id === hoverId.current || isMatch;
         if (showLabel && al > 0.3) {
-          c.globalAlpha = al;
-          c.fillStyle = col.fg;
-          c.font = `${isMatch ? "600 12px" : "11px"} "Segoe UI", Roboto, system-ui, sans-serif`;
-          c.textAlign = "center";
           const t = meta.title.length > 28 ? meta.title.slice(0, 27) + "…" : meta.title;
-          c.fillText(t, sx, sy + rr + 13);
+          // ưu tiên: đang rê/chọn > khớp tìm kiếm > lân cận nút đang chọn > nút nhiều liên kết
+          const pri = n.id === hoverId.current || n.id === sel ? 3 : isMatch ? 2 : hl?.has(n.id) ? 1 : 0;
+          labelQ.push({ text: t, x: sx, y: sy + rr + 13, al, bold: isMatch, pri: pri * 1000 + meta.degree });
         }
+      }
+      // Nhãn vẽ sau mọi nút (không bị nút đè) và bỏ nhãn chồng lên nhãn đã vẽ; nhãn ưu tiên cao luôn hiện.
+      labelQ.sort((p, q) => q.pri - p.pri);
+      c.textAlign = "center";
+      const fontOf = (bold: boolean) => `${bold ? "600 12px" : "11px"} "Segoe UI", Roboto, system-ui, sans-serif`;
+      const boxes = labelQ.map((l) => {
+        c.font = fontOf(l.bold);
+        const half = c.measureText(l.text).width / 2 + 3;
+        return [l.x - half, l.y - 11, l.x + half, l.y + 4] as [number, number, number, number];
+      });
+      for (const i of placeLabels(boxes, labelQ.map((l) => l.pri >= 3000))) {
+        const l = labelQ[i];
+        c.globalAlpha = l.al;
+        c.font = fontOf(l.bold);
+        // viền nền mỏng quanh chữ để đọc được cả khi đè lên cạnh
+        c.lineWidth = 3;
+        c.strokeStyle = col.bg;
+        c.strokeText(l.text, l.x, l.y);
+        c.fillStyle = col.fg;
+        c.fillText(l.text, l.x, l.y);
       }
       c.globalAlpha = 1;
     };

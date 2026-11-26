@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FOLDER_PALETTE, NO_FOLDER_COLOR, boundsOf, buildView, createSim, folderColors, folderKey, highlightSet, hitTest, isSettled,
-  densityCutoffs, matchNodes, neighborSet, quantile, stepSim,
+  densityCutoffs, matchNodes, neighborSet, placeLabels, quantile, stepSim,
 } from "../src/lib/graphModel.ts";
 import type { GEdge, GNode, GraphData } from "../src/lib/graphModel.ts";
 
@@ -165,4 +165,36 @@ test("gợi ý đã ✓ luôn hiện bất kể ngưỡng, nhưng ẩn khi tắt
   const d: GraphData = { nodes: [node(1), node(2), node(3)], edges: [{ ...edge(1, 2, 0.5), accepted: true }, edge(2, 3, 0.5)] };
   assert.deepEqual(buildView(d, { ...base, minScore: 0.9 }).edges.map((e) => [e.source, e.target]), [[1, 2]]);
   assert.equal(buildView(d, { ...base, minScore: 0.9, showSemantic: false }).edges.length, 0);
+});
+
+test("layout groups notes of the same folder and keeps clusters apart despite cross-folder links", () => {
+  const nodes: GNode[] = [];
+  for (let f = 1; f <= 3; f++) for (let i = 0; i < 6; i++) nodes.push({ id: f * 10 + i, title: `n${f}${i}`, source: "md", has_file: false, degree: 0, folder_id: f });
+  const edges: GEdge[] = [];
+  for (let f = 1; f <= 3; f++) for (let i = 0; i < 5; i++) edges.push({ source: f * 10 + i, target: f * 10 + i + 1, semantic_score: 0.75, wiki: false });
+  // vài cạnh khác thư mục, đủ mạnh để layout cũ kéo các cụm chồng lên nhau
+  edges.push({ source: 10, target: 20, semantic_score: 0.8, wiki: false }, { source: 23, target: 33, semantic_score: 0.8, wiki: false },
+    { source: 15, target: 31, semantic_score: 0.8, wiki: false });
+  const sim = createSim(buildView({ nodes, edges }, base));
+  for (let i = 0; i < 400; i++) stepSim(sim);
+  const pos = (id: number) => sim.nodes[sim.index.get(id)!];
+  const groupOf = (id: number) => Math.floor(id / 10);
+  let inSum = 0, inN = 0, outSum = 0, outN = 0;
+  for (const p of nodes) for (const q of nodes) {
+    if (p.id >= q.id) continue;
+    const d = Math.hypot(pos(p.id).x - pos(q.id).x, pos(p.id).y - pos(q.id).y);
+    if (groupOf(p.id) === groupOf(q.id)) { inSum += d; inN++; } else { outSum += d; outN++; }
+  }
+  assert.ok(inSum / inN < 0.6 * (outSum / outN), `cùng thư mục ${inSum / inN} vs khác ${outSum / outN}`);
+  // không có hai nút nào dính vào nhau
+  for (let i = 0; i < sim.nodes.length; i++) for (let j = i + 1; j < sim.nodes.length; j++) {
+    const a = sim.nodes[i], b = sim.nodes[j];
+    assert.ok(Math.hypot(a.x - b.x, a.y - b.y) > a.r + b.r, "hai nút chồng lên nhau");
+  }
+});
+
+test("placeLabels skips labels that overlap an earlier one unless forced", () => {
+  const boxes: [number, number, number, number][] = [[0, 0, 50, 10], [40, 5, 90, 15], [100, 0, 150, 10], [45, 2, 60, 12]];
+  assert.deepEqual(placeLabels(boxes), [0, 2]);
+  assert.deepEqual(placeLabels(boxes, [false, false, false, true]), [0, 2, 3]);
 });

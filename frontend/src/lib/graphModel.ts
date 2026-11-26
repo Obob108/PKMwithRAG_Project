@@ -165,17 +165,20 @@ export interface SimNode {
   fixed: boolean;
   r: number;
   deg: number;
+  g: number; // chỉ số cụm (thư mục) -> neo trong anchors
 }
 export interface SimLink {
   a: number; // chỉ số trong nodes
   b: number;
   w: number; // 0..1, cạnh càng mạnh càng ngắn
+  cross: boolean; // nối hai thư mục khác nhau: lò xo yếu và dài hơn để không kéo các cụm chồng lên nhau
 }
 export interface Sim {
   nodes: SimNode[];
   links: SimLink[];
   index: Map<number, number>;
   alpha: number;
+  anchors: { x: number; y: number }[]; // tâm mỗi cụm thư mục, xếp trên một vòng tròn
 }
 
 export function nodeRadius(deg: number): number {
@@ -190,17 +193,32 @@ function rng(seed: number): () => number {
   };
 }
 
+/** Tâm các cụm: mỗi thư mục một điểm trên vòng tròn, bán kính tăng theo số cụm và số ghi chú. */
+function clusterAnchors(groups: number, total: number): { x: number; y: number }[] {
+  if (groups <= 1) return [{ x: 0, y: 0 }];
+  const R = 90 + groups * 38 + Math.sqrt(total) * 12;
+  return Array.from({ length: groups }, (_, i) => {
+    const t = (i / groups) * Math.PI * 2 - Math.PI / 2;
+    return { x: Math.cos(t) * R, y: Math.sin(t) * R };
+  });
+}
+
 export function createSim(view: GraphData, prev?: Map<number, { x: number; y: number }>): Sim {
   const rand = rng(12345);
-  const spread = 60 + Math.sqrt(view.nodes.length) * 28;
+  // Gom theo thư mục: ghi chú cùng thư mục bắt đầu quanh cùng một tâm và được kéo nhẹ về tâm đó.
+  const keys = [...new Set(view.nodes.map((n) => folderKey(n.folder_id)))].sort();
+  const groupOf = new Map(keys.map((k, i) => [k, i]));
+  const anchors = clusterAnchors(keys.length, view.nodes.length);
   const nodes: SimNode[] = view.nodes.map((n) => {
     const p = prev?.get(n.id);
+    const g = groupOf.get(folderKey(n.folder_id)) ?? 0;
     const angle = rand() * Math.PI * 2;
+    const dist = 20 + rand() * 50;
     return {
       id: n.id,
-      x: p ? p.x : Math.cos(angle) * spread * (0.4 + rand() * 0.6),
-      y: p ? p.y : Math.sin(angle) * spread * (0.4 + rand() * 0.6),
-      vx: 0, vy: 0, fixed: false, r: nodeRadius(n.degree), deg: n.degree,
+      x: p ? p.x : anchors[g].x + Math.cos(angle) * dist,
+      y: p ? p.y : anchors[g].y + Math.sin(angle) * dist,
+      vx: 0, vy: 0, fixed: false, r: nodeRadius(n.degree), deg: n.degree, g,
     };
   });
   const index = new Map(nodes.map((n, i) => [n.id, i]));
@@ -208,13 +226,15 @@ export function createSim(view: GraphData, prev?: Map<number, { x: number; y: nu
   for (const e of view.edges) {
     const a = index.get(e.source);
     const b = index.get(e.target);
-    if (a !== undefined && b !== undefined) links.push({ a, b, w: e.wiki ? 1 : Math.min(1, Math.max(0, e.semantic_score ?? 0.5)) });
+    if (a !== undefined && b !== undefined) {
+      links.push({ a, b, w: e.wiki ? 1 : Math.min(1, Math.max(0, e.semantic_score ?? 0.5)), cross: nodes[a].g !== nodes[b].g });
+    }
   }
-  return { nodes, links, index, alpha: prev && prev.size ? 0.35 : 1 };
+  return { nodes, links, index, alpha: prev && prev.size ? 0.35 : 1, anchors };
 }
 
 export function stepSim(sim: Sim): void {
-  const { nodes, links } = sim;
+  const { nodes, links, anchors } = sim;
   const a = sim.alpha;
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
@@ -228,7 +248,11 @@ export function stepSim(sim: Sim): void {
         d2 = 1;
       }
       const d = Math.sqrt(d2);
-      const f = (2600 * a) / d2;
+      // đẩy nhau; khác cụm đẩy mạnh hơn để các cụm tách rời
+      let f = ((nodes[i].g === nodes[j].g ? 3200 : 5200) * a) / d2;
+      // va chạm: hai nút không được gần hơn tổng bán kính + khoảng cho nhãn
+      const minD = nodes[i].r + nodes[j].r + 26;
+      if (d < minD) f += (minD - d) * 0.5;
       const fx = (dx / d) * f;
       const fy = (dy / d) * f;
       nodes[i].vx -= fx;
@@ -243,8 +267,10 @@ export function stepSim(sim: Sim): void {
     const dx = q.x - p.x;
     const dy = q.y - p.y;
     const d = Math.sqrt(dx * dx + dy * dy) || 1;
-    const rest = 50 + (1 - l.w) * 90;
-    const f = (d - rest) * 0.04 * a * (0.5 + l.w);
+    // cạnh khác thư mục: dài và yếu, chỉ "chỉ đường" giữa hai cụm chứ không kéo chúng chồng lên nhau
+    const rest = l.cross ? 160 + (1 - l.w) * 80 : 55 + (1 - l.w) * 70;
+    const k = l.cross ? 0.008 : 0.04;
+    const f = (d - rest) * k * a * (0.5 + l.w);
     const fx = (dx / d) * f;
     const fy = (dy / d) * f;
     p.vx += fx;
@@ -258,14 +284,32 @@ export function stepSim(sim: Sim): void {
       n.vy = 0;
       continue;
     }
-    n.vx -= n.x * 0.012 * a; // hút nhẹ về tâm
-    n.vy -= n.y * 0.012 * a;
+    const c = anchors[n.g] ?? { x: 0, y: 0 };
+    n.vx -= (n.x - c.x) * 0.02 * a; // hút về tâm cụm thư mục của mình
+    n.vy -= (n.y - c.y) * 0.02 * a;
+    n.vx -= n.x * 0.003 * a; // và hút rất nhẹ về giữa để cả graph không trôi
+    n.vy -= n.y * 0.003 * a;
     n.vx *= 0.82;
     n.vy *= 0.82;
     n.x += n.vx;
     n.y += n.vy;
   }
   sim.alpha = Math.max(0.015, sim.alpha * 0.985);
+}
+
+/** Nhãn: chọn những nhãn không đè lên nhau, ưu tiên theo thứ tự `items` (đặt nút quan trọng lên đầu).
+ *  Mỗi khung là [x0, y0, x1, y1] trên màn hình; trả về chỉ số các nhãn được vẽ. */
+export function placeLabels(boxes: [number, number, number, number][], force: boolean[] = []): number[] {
+  const placed: [number, number, number, number][] = [];
+  const out: number[] = [];
+  boxes.forEach((b, i) => {
+    const hit = placed.some((p) => b[0] < p[2] && b[2] > p[0] && b[1] < p[3] && b[3] > p[1]);
+    if (!hit || force[i]) {
+      placed.push(b);
+      out.push(i);
+    }
+  });
+  return out;
 }
 
 export function isSettled(sim: Sim): boolean {
